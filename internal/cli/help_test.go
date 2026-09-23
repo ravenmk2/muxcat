@@ -48,7 +48,7 @@ func TestHelpPlainNonTTY(t *testing.T) {
 func TestHelpHeaderVersion(t *testing.T) {
 	out := runHelp(t, "--help")
 	firstLine, _, _ := strings.Cut(out, "\n")
-	want := "🐱 muxcat — a CLI client for infrastructure backends (test)"
+	want := "🐱 muxcat — universal CLI client for infrastructure backends (test)"
 	if firstLine != want {
 		t.Fatalf("header line = %q, want %q", firstLine, want)
 	}

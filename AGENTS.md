@@ -25,16 +25,21 @@ muxcat/
 
 ## 路线图
 
-每种 connector 一个阶段：
+✅ 已完成　📋 计划中（不分先后）
 
-- P0 ✅ 工程骨架 + SQLite
-- P1 MySQL
-- P2 Postgres
-- P3 Redis
-- P4 MongoDB
-- P5 ElasticSearch
-- P6 OpenObserve
-- P7 RabbitMQ（Management HTTP API + AMQP）
-- P8 EMQX
-- P9 Jenkins（HTTP API）
-- 后续：TUI（bubbletea，P1 之后介入）、跨类型 `conn ls` 汇总视图、密钥轮换
+| 项目 | 状态 |
+|---|---|
+| 工程骨架 + SQLite | ✅ |
+| MySQL | 📋 |
+| Postgres | 📋 |
+| Redis | 📋 |
+| MongoDB | 📋 |
+| ElasticSearch | 📋 |
+| OpenObserve | 📋 |
+| RabbitMQ | 📋 |
+| AMQP | 📋 |
+| EMQX | 📋 |
+| Jenkins | 📋 |
+| TUI | 📋 |
+| 跨类型 conn ls 汇总 | 📋 |
+| 密钥轮换 | 📋 |

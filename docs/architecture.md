@@ -1,10 +1,10 @@
 # muxcat 总体架构
 
-muxcat 是一个面向多种数据源的统一命令行客户端：以内置 Connector 方式接入数据库等数据源，提供一致的连接管理、查询与结构化输出体验。本文是设计契约的落盘版，与代码不一致时以修改契约并同步本文为准。
+muxcat 是一个面向基础设施后端的统一命令行客户端：以内置 Connector 方式接入各类基础设施（数据库、缓存、消息队列、可观测性平台等），提供一致的连接管理、查询与结构化输出体验。本文是设计契约的落盘版，与代码不一致时以修改契约并同步本文为准。
 
 ## 三层模型
 
-- **Connector（类型）**：一种数据源的实现，如 `sqlite`。每个 connector 注册到 `internal/connector` 的注册表（名字 → cobra 命令树工厂），root 组装时遍历挂载为 `muxcat <name>` 子命令。
+- **Connector（类型）**：一种基础设施后端的实现，如 `sqlite`。每个 connector 注册到 `internal/connector` 的注册表（名字 → cobra 命令树工厂），root 组装时遍历挂载为 `muxcat <name>` 子命令。
 - **Instance（端点）**：一个具体的数据库端点，如某个 SQLite 文件路径。
 - **Connection（会话，用户面缩写 `conn`）**：一条指向 instance 的使用配置（只读、超时等），是命令 `-c/--conn` 选择的对象。
 

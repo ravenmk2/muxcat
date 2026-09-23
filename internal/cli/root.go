@@ -43,9 +43,9 @@ func RuntimeFrom(ctx context.Context) *Runtime {
 func NewRoot(version string) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "muxcat",
-		Short: "A unified CLI client for many data sources",
+		Short: "Universal CLI client for infrastructure backends",
 		// The first line carries the version in plain text, without styling.
-		Long:          "🐱 muxcat — a CLI client for infrastructure backends (" + version + ")",
+		Long:          "🐱 muxcat — universal CLI client for infrastructure backends (" + version + ")",
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
