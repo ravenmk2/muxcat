@@ -4,6 +4,7 @@ muxcat 是一个面向基础设施后端的统一命令行客户端（Go CLI）�
 
 ## 目录结构
 
+```txt
 muxcat/
 ├── cmd/muxcat/          # 程序入口，仅组装启动（var version = "dev"）
 ├── internal/            # 应用私有代码
@@ -15,6 +16,7 @@ muxcat/
 ├── schema/              # JSON Schema（Draft 2020-12，go:embed）与校验实现
 ├── docs/                # 设计文档
 └── scripts/             # 辅助脚本
+```
 
 ## 文档索引
 
