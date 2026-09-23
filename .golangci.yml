@@ -1,0 +1,11 @@
+version: "2"
+
+linters:
+  enable:
+    - misspell     # English spell checking
+    - unconvert    # redundant type conversions
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

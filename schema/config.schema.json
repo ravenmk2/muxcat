@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ravenmk2/muxcat/schema/config.schema.json",
+  "title": "muxcat main config (config.json)",
+  "type": "object",
+  "required": ["version"],
+  "properties": {
+    "version": { "type": "integer", "const": 1 },
+    "props": {
+      "type": "object",
+      "properties": {
+        "defaults": {
+          "type": "object",
+          "properties": {
+            "output": { "enum": ["auto", "table", "plain", "tsv", "json"] },
+            "color": { "enum": ["auto", "always", "never"] },
+            "timeout": { "type": "string" },
+            "limit": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "key": {
+          "type": "object",
+          "properties": {
+            "source": { "enum": ["keychain", "env"] }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

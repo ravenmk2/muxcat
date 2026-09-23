@@ -1,0 +1,8 @@
+.vscode/
+.idea/
+.agents/
+
+/dist/
+/web/dist/
+
+/.muxcat-home
