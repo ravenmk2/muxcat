@@ -6,6 +6,7 @@ import (
 	"github.com/ravenmk2/muxcat/internal/cli"
 	// Register built-in connectors.
 	_ "github.com/ravenmk2/muxcat/internal/connector/mysql"
+	_ "github.com/ravenmk2/muxcat/internal/connector/openobserve"
 	_ "github.com/ravenmk2/muxcat/internal/connector/redis"
 	_ "github.com/ravenmk2/muxcat/internal/connector/sqlite"
 )

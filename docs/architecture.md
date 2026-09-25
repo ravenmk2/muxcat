@@ -70,6 +70,7 @@ muxcat/
 │   └── connector/
 │       ├── registry.go    # connector 注册表
 │       ├── mysql/         # MySQL connector（见 docs/connectors/mysql.md）
+│       ├── openobserve/   # OpenObserve connector（见 docs/connectors/openobserve.md）
 │       ├── redis/         # Redis connector（见 docs/connectors/redis.md）
 │       └── sqlite/        # SQLite connector（见 docs/connectors/sqlite.md）
 ├── schema/                # JSON Schema（go:embed）+ 校验实现
