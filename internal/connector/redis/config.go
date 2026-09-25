@@ -13,21 +13,26 @@ import (
 // FileName is the redis connector's config file name.
 const FileName = "redis.json"
 
-// Instance is a redis standalone endpoint. Password is stored as an
-// enc:v1: blob and is never echoed back in output.
+// Instance is a redis standalone endpoint: pure endpoint properties only.
+// Username/Password/DB are legacy fields kept as fallbacks for configs
+// written before credentials and db moved to connections; new configs never
+// write them.
 type Instance struct {
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
-	DB       int    `json:"db,omitempty"`
+	Username string `json:"username,omitempty"` // legacy fallback
+	Password string `json:"password,omitempty"` // legacy fallback (enc:v1: blob)
+	DB       int    `json:"db,omitempty"`       // legacy fallback
 	TLS      bool   `json:"tls,omitempty"`
 }
 
-// Connection is a session config pointing at an instance. DB, when set,
-// overrides the instance's logical database.
+// Connection is a session config pointing at an instance: credentials, the
+// logical database, and usage policies. Password is stored as an enc:v1:
+// blob and is never echoed back in output.
 type Connection struct {
 	Instance       string `json:"instance"`
+	Username       string `json:"username,omitempty"`
+	Password       string `json:"password,omitempty"`
 	DB             *int   `json:"db,omitempty"`
 	Readonly       bool   `json:"readonly,omitempty"`
 	AllowDangerous bool   `json:"allowDangerous,omitempty"`
@@ -118,13 +123,30 @@ func (c *Config) instanceOf(conn Connection) (Instance, error) {
 	return inst, nil
 }
 
-// effectiveDB resolves the logical database: the connection-level db
-// overrides the instance-level db.
+// effectiveDB resolves the logical database: the connection-level db wins;
+// the instance-level db is a legacy fallback for old configs.
 func effectiveDB(inst Instance, conn Connection) int {
 	if conn.DB != nil {
 		return *conn.DB
 	}
 	return inst.DB
+}
+
+// effectiveUsername / effectivePassword resolve credentials: connection-level
+// values win; instance-level fields are a legacy fallback for configs written
+// before credentials moved to connections.
+func effectiveUsername(inst Instance, conn Connection) string {
+	if conn.Username != "" {
+		return conn.Username
+	}
+	return inst.Username
+}
+
+func effectivePassword(inst Instance, conn Connection) string {
+	if conn.Password != "" {
+		return conn.Password
+	}
+	return inst.Password
 }
 
 // addr renders the host:port of an instance.

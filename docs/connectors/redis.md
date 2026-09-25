@@ -8,21 +8,22 @@ Redis connector 接入 Redis standalone 实例（Redis 6+，含 Redis 8），驱
 {
   "version": 1,
   "instances": {
-    "local": {
-      "host": "127.0.0.1", "port": 6379,
-      "username": "", "password": "enc:v1:...",
-      "db": 0, "tls": false
-    }
+    "local": { "host": "127.0.0.1", "port": 6379, "tls": false }
   },
   "connections": {
-    "local": { "instance": "local", "db": 0, "readonly": false, "allowDangerous": false, "timeout": "5s" }
+    "local": {
+      "instance": "local", "username": "", "password": "enc:v1:...", "db": 0,
+      "readonly": false, "allowDangerous": false, "timeout": "5s"
+    }
   },
   "defaultConnection": "local"
 }
 ```
 
-- `instances`：名字 → `{host, port, username?, password?, db?, tls?}`。`username` 可空，空表示 default 用户（对接 requireauth 与 ACL 均可）；`password` 以 `enc:v1:` 加密落盘，永不在输出中回显。
-- `connections`：名字 → `{instance, db?, readonly?, allowDangerous?, timeout?}`；`db` 覆盖 instance 的逻辑库；`timeout` 为 Go duration 字符串，覆盖全局 `--timeout`。
+- `instances`：名字 → `{host, port, tls?}`，纯端点属性。
+- `connections`：名字 → `{instance, username?, password?, db?, readonly?, allowDangerous?, timeout?}`。`username` 可空，空表示 default 用户（对接 requireauth 与 ACL 均可）；`password` 以 `enc:v1:` 加密落盘，永不在输出中回显；`timeout` 为 Go duration 字符串，覆盖全局 `--timeout`。
+- **多用户**：Redis 6+ ACL 支持一台实例多用户，因此凭证与 db 都是 connection 属性——同一 instance 可挂多个连接（如 admin / alice 只读）。
+- **向后兼容**：旧配置中写在 instance 上的 `username`/`password`/`db` 仍生效（connection 未设置时回落），新写入只落在 connection 层。
 - `defaultConnection`：缺省连接名；`-c/--conn` 未指定时使用，两者皆无报 `CONN_NOT_FOUND`。
 - `conn add <name>` 同名创建 instance 与 connection；`conn rm` 删除连接时，同名 instance 无其他引用则一并删除。
 
@@ -33,11 +34,11 @@ Redis connector 接入 Redis standalone 实例（Redis 6+，含 Redis 8），驱
 | 命令 | 说明 |
 |---|---|
 | `redis conn add <name> --host <h> [--port 6379] [--db 0] [--username u] [--password p] [--tls] [--readonly] [--allow-dangerous] [--timeout 5s] [--set-default]` | 新增连接。非 TTY 缺 `--host` 报 `MISSING_ARGUMENT`；TTY 缺参走 huh 表单补全（host/port/db/username/password/tls/readonly）。`--password` 为明文凭据参数，使用时 stderr 警告。无默认连接时自动设为默认 |
-| `redis conn ls` | 列出连接（name / addr / db / tls / readonly / default 标记） |
+| `redis conn ls` | 列出连接（name / addr / user / db / tls / readonly / default 标记） |
 | `redis conn show <name>` | 连接详情；password 不回显 |
 | `redis conn rm <name> [--yes]` | 删除连接；非 TTY 必须 `--yes`，TTY 弹确认 |
 | `redis conn default <name>` | 设为默认连接 |
-| `redis conn test <name>` | PING + 读 `INFO server` 的 redis_version，返回 `{ok, latency_ms, version}` |
+| `redis conn test <name>` | PING + 读 `INFO server` 的 redis_version，返回 `{ok, latency_ms, version}`。容忍最小权限 ACL 用户：PING/INFO 被 NOPERM 拒绝时视为认证成功（TCP+AUTH 已验证），version 置空并附 note |
 
 ### 通用数据命令
 
@@ -82,7 +83,7 @@ exec/eval 的 `type` 枚举为 string/integer/double/boolean/array/map/null：go
 
 connector 侧命令名分类，exec 与结构化命令共用一张分类表：
 
-- `readonly: true`：仅允许读命令（get/mget/getrange/strlen/exists/ttl/pttl/type/scan/sscan/hscan/zscan/randomkey/hget 族/lrange 族/smembers 族/zrange 族/xinfo/xrange/xlen/dbsize/info/config get/ping/echo/object/memory usage），违反报 `READONLY_VIOLATION`（退出码 5）。`eval` 属写操作，readonly 连接拒绝。
+- `readonly: true`：仅允许读命令（get/mget/getrange/strlen/exists/ttl/pttl/type/scan/sscan/hscan/zscan/randomkey/hget 族/lrange 族/smembers 族/zrange 族/xinfo/xrange/xlen/dbsize/info/config get/ping/echo/object/memory usage），违反报 `READONLY_VIOLATION`（退出码 5）。`eval` 属写操作，readonly 连接拒绝。与服务端 ACL（如 `+@read` 用户）可叠加成双保险；服务端 NOPERM 报 `AUTH_FAILED`（退出码 4）。
 - `allowDangerous: false`（默认）：拒绝 `FLUSHALL FLUSHDB SHUTDOWN DEBUG KEYS RESET FAILOVER REPLICAOF SLAVEOF SWAPDB SCRIPT` 以及 `CONFIG` 的非 GET 子命令，报 `UNSUPPORTED_OPERATION`（退出码 2，与 output 中央映射一致，属用法类），hint 指向连接配置。`CONFIG GET` 是唯一按子命令拆分放行的命令。
 
 负数位置参数（如 `lrange queue 0 -1`、`exec ZRANGE board 0 -1`）是 Redis 惯例写法：exec / lrange / zrange 已关闭 flag 与位置参数的交错解析，flag 需置于位置参数之前，位置参数之后的一律按参数处理。

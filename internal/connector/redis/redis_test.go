@@ -260,22 +260,28 @@ func TestConnLifecycle(t *testing.T) {
 		t.Fatalf("defaultConnection = %q, want local", cfg.DefaultConnection)
 	}
 	inst := cfg.Instances["local"]
-	if inst.Host != "127.0.0.1" || inst.Port != 6380 || inst.DB != 2 {
+	if inst.Host != "127.0.0.1" || inst.Port != 6380 {
 		t.Fatalf("instance = %+v", inst)
 	}
-	if !strings.HasPrefix(inst.Password, secret.Prefix) {
-		t.Fatalf("password should be an enc:v1: blob, got %q", inst.Password)
-	}
-	if strings.Contains(inst.Password, "s3cret") {
-		t.Fatal("password blob contains plaintext")
-	}
-	plain, err := secret.Decrypt(testMasterKey, inst.Password)
-	if err != nil || string(plain) != "s3cret" {
-		t.Fatalf("decrypt roundtrip = %q, %v", plain, err)
+	if inst.Username != "" || inst.Password != "" || inst.DB != 0 {
+		t.Fatalf("credentials/db must live on the connection, instance = %+v", inst)
 	}
 	conn := cfg.Connections["local"]
 	if conn.Instance != "local" || !conn.Readonly || conn.Timeout != "5s" || conn.AllowDangerous {
 		t.Fatalf("connection = %+v", conn)
+	}
+	if conn.DB == nil || *conn.DB != 2 {
+		t.Fatalf("connection db = %v, want 2", conn.DB)
+	}
+	if !strings.HasPrefix(conn.Password, secret.Prefix) {
+		t.Fatalf("password should be an enc:v1: blob, got %q", conn.Password)
+	}
+	if strings.Contains(conn.Password, "s3cret") {
+		t.Fatal("password blob contains plaintext")
+	}
+	plain, err := secret.Decrypt(testMasterKey, conn.Password)
+	if err != nil || string(plain) != "s3cret" {
+		t.Fatalf("decrypt roundtrip = %q, %v", plain, err)
 	}
 
 	// conn ls shows the connection without the password.
@@ -512,6 +518,43 @@ func TestEffectiveDB(t *testing.T) {
 	}
 }
 
+// TestCredentialResolution covers the credential layering: connection-level
+// username/password win; instance-level fields are a legacy fallback, and
+// clientOptions decrypts whichever blob is effective.
+func TestCredentialResolution(t *testing.T) {
+	setupEnv(t)
+	enc, err := secret.Encrypt(testMasterKey, []byte("legacypass"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst := Instance{Host: "h", Port: 6379, Username: "legacy", Password: enc, DB: 3}
+
+	if got := effectiveUsername(inst, Connection{}); got != "legacy" {
+		t.Fatalf("username fallback = %q, want legacy", got)
+	}
+	if got := effectiveUsername(inst, Connection{Username: "alice"}); got != "alice" {
+		t.Fatalf("username override = %q, want alice", got)
+	}
+	if got := effectivePassword(inst, Connection{}); got != enc {
+		t.Fatal("password should fall back to the instance blob")
+	}
+	if got := effectivePassword(inst, Connection{Password: "enc:v1:other"}); got != "enc:v1:other" {
+		t.Fatal("connection password should win")
+	}
+
+	cfg := &Config{
+		Instances:   map[string]Instance{"i": inst},
+		Connections: map[string]Connection{"c": {Instance: "i"}},
+	}
+	opts, err := clientOptions(cfg, cfg.Connections["c"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Username != "legacy" || opts.Password != "legacypass" || opts.DB != 3 {
+		t.Fatalf("legacy fallback: opts = %+v", opts)
+	}
+}
+
 func TestParseInfo(t *testing.T) {
 	text := "# Server\r\nredis_version:8.0.0\r\nrun_id:abc\r\n\r\n# Clients\r\nconnected_clients:3\r\n"
 	sections := parseInfo(text)
@@ -632,5 +675,17 @@ func TestHighlightFlagAlias(t *testing.T) {
 		if e := output.ToError(err); err == nil || e.Code != output.CodeMissingArgument {
 			t.Fatalf("%s bad: err=%v", flag, err)
 		}
+	}
+}
+
+func TestIsNoPerm(t *testing.T) {
+	if !isNoPerm(errors.New("NOPERM User alice has no permissions to run the 'ping' command")) {
+		t.Fatal("NOPERM prefix should be detected")
+	}
+	if isNoPerm(errors.New("WRONGPASS invalid username-password pair")) {
+		t.Fatal("WRONGPASS is not NOPERM")
+	}
+	if isNoPerm(nil) {
+		t.Fatal("nil is not NOPERM")
 	}
 }

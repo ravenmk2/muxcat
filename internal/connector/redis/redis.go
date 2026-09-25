@@ -86,15 +86,15 @@ func clientOptions(cfg *Config, conn Connection) (*goredis.Options, error) {
 	}
 	opts := &goredis.Options{
 		Addr:     addr(inst),
-		Username: inst.Username,
+		Username: effectiveUsername(inst, conn),
 		DB:       effectiveDB(inst, conn),
 	}
-	if inst.Password != "" {
+	if encPassword := effectivePassword(inst, conn); encPassword != "" {
 		key, _, err := masterKey()
 		if err != nil {
 			return nil, err
 		}
-		plain, err := secret.Decrypt(key, inst.Password)
+		plain, err := secret.Decrypt(key, encPassword)
 		if err != nil {
 			return nil, err
 		}
@@ -115,10 +115,21 @@ func openClient(ctx context.Context, cfg *Config, conn Connection) (*goredis.Cli
 	}
 	client := goredis.NewClient(opts)
 	if err := client.Ping(ctx).Err(); err != nil {
+		if isNoPerm(err) {
+			// A NOPERM PING still proves TCP + AUTH succeeded;
+			// least-privilege ACL users (e.g. +@read only) cannot PING
+			// but can run their permitted commands.
+			return client, nil
+		}
 		_ = client.Close()
 		return nil, classifyErr(err, "failed to connect to "+opts.Addr)
 	}
 	return client, nil
+}
+
+// isNoPerm reports whether err is a Redis NOPERM ACL error.
+func isNoPerm(err error) bool {
+	return err != nil && strings.HasPrefix(err.Error(), "NOPERM")
 }
 
 // queryTimeout resolves the command timeout: the connection-level timeout

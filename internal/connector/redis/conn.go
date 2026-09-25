@@ -138,19 +138,22 @@ func newConnAddCmd() *cobra.Command {
 			}
 
 			cfg.Instances[name] = Instance{
-				Host:     host,
-				Port:     port,
-				Username: username,
-				Password: encPassword,
-				DB:       db,
-				TLS:      tlsOn,
+				Host: host,
+				Port: port,
+				TLS:  tlsOn,
 			}
-			cfg.Connections[name] = Connection{
+			conn := Connection{
 				Instance:       name,
+				Username:       username,
+				Password:       encPassword,
 				Readonly:       readonly,
 				AllowDangerous: cli.FlagBool(cmd, "allow-dangerous"),
 				Timeout:        timeout,
 			}
+			if db != 0 {
+				conn.DB = &db
+			}
+			cfg.Connections[name] = conn
 			if cli.FlagBool(cmd, "set-default") || cfg.DefaultConnection == "" {
 				cfg.DefaultConnection = name
 			}
@@ -258,16 +261,17 @@ func newConnLsCmd() *cobra.Command {
 				if n == cfg.DefaultConnection {
 					def = "*"
 				}
-				addrStr, db, tlsOn := "?", 0, false
+				addrStr, user, db, tlsOn := "?", "", 0, false
 				if inst, ok := cfg.Instances[conn.Instance]; ok {
 					addrStr = addr(inst)
 					db = effectiveDB(inst, conn)
 					tlsOn = inst.TLS
+					user = effectiveUsername(inst, conn)
 				}
-				rows = append(rows, []any{n, addrStr, db, tlsOn, conn.Readonly, def})
+				rows = append(rows, []any{n, addrStr, user, db, tlsOn, conn.Readonly, def})
 			}
 			return cli.RenderResult(cmd, &output.Result{
-				Columns: []string{"name", "addr", "db", "tls", "readonly", "default"},
+				Columns: []string{"name", "addr", "user", "db", "tls", "readonly", "default"},
 				Rows:    rows,
 			}, meta("", start, false))
 		},
@@ -301,7 +305,7 @@ func newConnShowCmd() *cobra.Command {
 				"port":           inst.Port,
 				"db":             effectiveDB(inst, conn),
 				"tls":            inst.TLS,
-				"username":       inst.Username,
+				"username":       effectiveUsername(inst, conn),
 				"readonly":       conn.Readonly,
 				"allowDangerous": conn.AllowDangerous,
 				"timeout":        conn.Timeout,
@@ -426,15 +430,28 @@ func newConnTestCmd() *cobra.Command {
 				return err
 			}
 			defer func() { _ = client.Close() }()
+			// INFO may be denied for least-privilege ACL users; degrade to
+			// an empty version with a note instead of failing the test.
+			version, note := "", ""
 			info, err := client.Info(ctx, "server").Result()
-			if err != nil {
+			switch {
+			case err == nil:
+				version, _ = parseInfo(info)["server"].(map[string]any)["redis_version"].(string)
+			case isNoPerm(err):
+				note = "INFO not permitted for this user"
+			default:
 				return classifyErr(err, "connection test failed")
 			}
-			version, _ := parseInfo(info)["server"].(map[string]any)["redis_version"].(string)
 			latency := time.Since(start).Milliseconds()
+			value := map[string]any{"ok": true, "latency_ms": latency, "version": version}
+			message := fmt.Sprintf("connection ok (%d ms, redis %s)", latency, version)
+			if note != "" {
+				value["note"] = note
+				message = fmt.Sprintf("connection ok (%d ms, %s)", latency, note)
+			}
 			return cli.RenderResult(cmd, &output.Result{
-				Value:   map[string]any{"ok": true, "latency_ms": latency, "version": version},
-				Message: fmt.Sprintf("connection ok (%d ms, redis %s)", latency, version),
+				Value:   value,
+				Message: message,
 			}, meta(name, start, false))
 		},
 	}
