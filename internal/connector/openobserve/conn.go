@@ -1,6 +1,8 @@
 package openobserve
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -377,12 +379,13 @@ func newConnTestCmd() *cobra.Command {
 			if _, err := cl.do(cmd.Context(), "GET", "/api/"+url.PathEscape(conn.org())+"/streams?type=logs&fetchSchema=false", nil); err != nil {
 				return err
 			}
-			// Version is best-effort: an older server without /version must
-			// not fail an otherwise healthy test.
+			// Version is best-effort: GET /version on older servers, the
+			// _meta org's node list on newer ones; an unavailable version
+			// must not fail an otherwise healthy test.
 			version, note := "", ""
 			if vr, verr := cl.do(cmd.Context(), "GET", "/version", nil); verr == nil {
 				version = truncate(strings.TrimSpace(string(vr.body)), 64)
-			} else {
+			} else if version = clusterVersion(cmd.Context(), cl); version == "" {
 				note = "version endpoint unavailable"
 			}
 			latency := time.Since(start).Milliseconds()
@@ -403,4 +406,28 @@ func newConnTestCmd() *cobra.Command {
 func connNotFound(name string) *output.Error {
 	return output.NewError(output.CodeConnNotFound,
 		"connection not found: "+name, "list connections with muxcat openobserve conn ls")
+}
+
+// clusterVersion reads the server version from the _meta organization's
+// node list (newer servers without GET /version). Best-effort: any failure
+// (including a user without _meta access) yields "".
+func clusterVersion(ctx context.Context, cl *client) string {
+	vr, err := cl.do(ctx, "GET", "/api/_meta/node/list", nil)
+	if err != nil {
+		return ""
+	}
+	var regions map[string]map[string][]map[string]any
+	if err := json.Unmarshal(vr.body, &regions); err != nil {
+		return ""
+	}
+	for _, groups := range regions {
+		for _, nodes := range groups {
+			for _, n := range nodes {
+				if v, _ := n["version"].(string); v != "" {
+					return v
+				}
+			}
+		}
+	}
+	return ""
 }

@@ -36,7 +36,7 @@ OpenObserve connector 通过 OpenObserve 的 REST API（HTTP Basic Auth）接入
 | `o2 conn show <name>` | 连接详情；password 不回显 |
 | `o2 conn rm <name> [--yes]` | 删除连接；非 TTY 必须 `--yes`，TTY 弹确认 |
 | `o2 conn default <name>` | 设为默认连接 |
-| `o2 conn test <name>` | `GET /api/{org}/streams` 验证认证 + 尽力读取 `GET /version`，返回 `{ok, latency_ms, version}`；version 端点不可用时留空并附 note，不影响测试结论 |
+| `o2 conn test <name>` | `GET /api/{org}/streams` 验证认证，返回 `{ok, latency_ms, version}`。version 尽力探测：`GET /version`（旧版服务端）→ `GET /api/_meta/node/list`（新版服务端，首个节点的 version）；均不可用（或无 `_meta` 权限）时留空并附 note，不影响测试结论 |
 
 ### stream 组
 

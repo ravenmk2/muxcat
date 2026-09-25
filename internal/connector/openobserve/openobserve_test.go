@@ -181,6 +181,30 @@ func TestConnLifecycle(t *testing.T) {
 	}
 }
 
+func TestConnTestVersionFallback(t *testing.T) {
+	setupEnv(t)
+	// A newer-style server: no GET /version; the version comes from the
+	// _meta org's node list instead.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/default/streams", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"list":[]}`))
+	})
+	mux.HandleFunc("/api/_meta/node/list", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"openobserve":{"zo1":[{"name":"n1","version":"v1.0.4"}]}}`))
+	})
+	s := &o2Server{Server: httptest.NewServer(mux)}
+	t.Cleanup(s.Close)
+	s.addConn(t, "local")
+
+	env := runJSON(t, "o2", "conn", "test", "local")
+	data := env["data"].(map[string]any)
+	if data["ok"] != true || data["version"] != "v1.0.4" {
+		t.Fatalf("version fallback failed: %v", data)
+	}
+}
+
 func TestConnAddRejectsUserinfoURL(t *testing.T) {
 	setupEnv(t)
 	_, err := runMuxcat(t, "o2", "conn", "add", "bad", "--url", "http://user:pass@127.0.0.1:5080")
