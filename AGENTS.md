@@ -37,7 +37,7 @@ muxcat/
 | 自更新 upgrade | ✅ |
 | MySQL | 📋 |
 | Postgres | 📋 |
-| Redis | 📋 |
+| Redis | ✅ |
 | etcd | 📋 |
 | MongoDB | 📋 |
 | ElasticSearch | 📋 |

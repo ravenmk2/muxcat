@@ -67,7 +67,8 @@ muxcat/
 │   ├── upgrade/           # 自更新：GitHub release 查询、带重试下载、checksum 校验、自替换（见 docs/upgrade.md）
 │   └── connector/
 │       ├── registry.go    # connector 注册表
-│       └── sqlite/        # SQLite connector（见 docs/connectors/sqlite.md）
+│       ├── sqlite/        # SQLite connector（见 docs/connectors/sqlite.md）
+│       └── redis/         # Redis connector（见 docs/connectors/redis.md）
 ├── schema/                # JSON Schema（go:embed）+ 校验实现
 ├── docs/                  # 设计文档
 └── scripts/build.sh       # 本地多平台构建（--install 到 ~/.local/bin）
