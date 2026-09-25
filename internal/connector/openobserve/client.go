@@ -49,6 +49,7 @@ func New() *cobra.Command {
 		newQueryCmd(),
 		newIngestCmd(),
 		newRequestCmd(),
+		newApiCmd(),
 	)
 	return c
 }

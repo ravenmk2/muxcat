@@ -124,6 +124,17 @@ o2 request <method> <path> [--file <path|->]
 - **完成的 HTTP 交换不论状态码都原样报告**：data 为 `{status, headers, body}`（body 按响应 Content-Type 解析为 JSON 值，否则字符串）；文本模式输出 `HTTP <status>` + 美化 body。只有传输层失败（连接失败/超时）才产生错误。
 - **readonly 连接仅允许 GET/HEAD**，其余方法报 `READONLY_VIOLATION`（退出码 5）。`request` 可触达写/删除端点，readonly 是唯一拦截；显式调用即意图，不设 allowDangerous。
 
+### api 组
+
+从实例的 OpenAPI spec（`GET /api-doc/openapi.json`，位于服务端根路径而非 `/api/{org}` 下）做结构化探索——"发现端点 → 看参数 → 用 `request` 调"的工作流入口：
+
+| 命令 | 说明 |
+|---|---|
+| `o2 api ls [--keyword k]` | 列出 spec 全部端点，表格 `method, path, summary`；`--keyword` 对 path/summary 做大小写不敏感过滤；`--json` 输出结构化条目数组 |
+| `o2 api show <path>` | 输出单个端点的 spec 片段（方法、参数、schema，JSON 原样）。path 支持三种写法：spec 原样（`/api/{org_id}/_search`）、参数名变体（`/api/{org}/_search`）、具体值（`/api/default/_search`）——按段匹配，spec 中的 `{param}` 段匹配任意具体段；多义时报错并列出候选 |
+
+服务端无 spec 端点（旧版）时报 `QUERY_ERROR` 并附官方文档链接 hint。
+
 ## 错误映射
 
 | 场景 | 错误码 | 退出码 |

@@ -164,6 +164,14 @@ func newO2Server(t *testing.T) *o2Server {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"method": r.Method})
 	})
+	mux.HandleFunc("/api-doc/openapi.json", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"openapi":"3.0.0","paths":{
+			"/api/{org_id}/_search":{"post":{"summary":"Search logs","parameters":[{"name":"type","in":"query"}]}},
+			"/api/{org_id}/{stream_name}/_values":{"get":{"summary":"List field values"}},
+			"/api/{org_id}/streams":{"get":{"summary":"List streams"}}
+		}}`))
+	})
 	s.Server = httptest.NewServer(mux)
 	t.Cleanup(s.Close)
 	return s
@@ -778,5 +786,88 @@ func TestIngestLogs(t *testing.T) {
 	// bare ingest prints help
 	if _, err := runMuxcat(t, "o2", "ingest"); err != nil {
 		t.Fatalf("bare ingest should print help: %v", err)
+	}
+}
+
+func TestApiLs(t *testing.T) {
+	setupEnv(t)
+	s := newO2Server(t)
+	s.addConn(t, "local")
+
+	out, err := runMuxcat(t, "o2", "api", "ls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"method", "path", "summary", "POST", "/api/{org_id}/_search", "Search logs"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("api ls output missing %q:\n%s", want, out)
+		}
+	}
+
+	// keyword filter (case-insensitive, matches path or summary)
+	out, err = runMuxcat(t, "o2", "api", "ls", "--keyword", "VALUES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "_values") || strings.Contains(out, "_search\"") {
+		t.Fatalf("keyword filter failed:\n%s", out)
+	}
+
+	// JSON mode yields the structured entry list
+	env := runJSON(t, "o2", "api", "ls", "--keyword", "streams")
+	entries := env["data"].([]any)
+	if len(entries) != 1 || entries[0].(map[string]any)["path"] != "/api/{org_id}/streams" {
+		t.Fatalf("api ls JSON unexpected: %v", entries)
+	}
+}
+
+func TestApiShow(t *testing.T) {
+	setupEnv(t)
+	s := newO2Server(t)
+	s.addConn(t, "local")
+
+	// exact spec path
+	out, err := runMuxcat(t, "o2", "api", "show", "/api/{org_id}/_search")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Search logs") || !strings.Contains(out, `"parameters"`) {
+		t.Fatalf("api show output unexpected:\n%s", out)
+	}
+
+	// a concrete path resolves segment-wise to the parameterized spec path
+	out, err = runMuxcat(t, "o2", "api", "show", "/api/default/_search")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "/api/{org_id}/_search") {
+		t.Fatalf("segment-wise resolution failed:\n%s", out)
+	}
+
+	// unknown endpoint
+	_, err = runMuxcat(t, "o2", "api", "show", "/api/default/_nope")
+	if e := output.ToError(err); e.Code != output.CodeQueryError {
+		t.Fatalf("unknown path code = %v", e)
+	}
+
+	// JSON mode carries the raw fragment
+	env := runJSON(t, "o2", "api", "show", "/api/{org_id}/streams")
+	frag := env["data"].(map[string]any)
+	if frag["/api/{org_id}/streams"].(map[string]any)["get"].(map[string]any)["summary"] != "List streams" {
+		t.Fatalf("api show JSON unexpected: %v", frag)
+	}
+}
+
+func TestApiSpecMissing(t *testing.T) {
+	setupEnv(t)
+	// A server without the spec endpoint gets a clear error and hint.
+	s := &o2Server{Server: httptest.NewServer(http.NewServeMux())}
+	t.Cleanup(s.Close)
+	s.addConn(t, "local")
+
+	_, err := runMuxcat(t, "o2", "api", "ls")
+	e := output.ToError(err)
+	if e.Code != output.CodeQueryError || !strings.Contains(e.Hint, "openobserve.ai/docs") {
+		t.Fatalf("spec-missing error = %v (hint %q)", e, e.Hint)
 	}
 }
