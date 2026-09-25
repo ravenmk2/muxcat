@@ -27,7 +27,21 @@ func newRequestCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "request <method> <path>",
 		Short: "Raw request passthrough to the OpenObserve server",
-		Args:  cli.ExactArgs(2, "<method> <path>", "method", "path"),
+		Long: `Raw request passthrough to the OpenObserve server (curl semantics).
+
+The path is appended to the instance base URL verbatim and must start
+with / (it carries the /api/{org}/... prefix itself), e.g.:
+  muxcat o2 request GET /api/default/streams
+  muxcat o2 request POST /api/default/app/_json --file logs.json
+
+Any completed exchange is reported as {status, headers, body} whatever
+the status code; only transport failures become errors. On readonly
+connections only GET/HEAD are allowed.
+
+Discover available endpoints from the server's OpenAPI spec first:
+  muxcat o2 api ls [--keyword k]   # list endpoints (method, path, summary)
+  muxcat o2 api show <path>        # show one endpoint's spec fragment`,
+		Args: cli.ExactArgs(2, "<method> <path>", "method", "path"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			method := strings.ToUpper(args[0])

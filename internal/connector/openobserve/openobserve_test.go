@@ -834,6 +834,12 @@ func TestApiShow(t *testing.T) {
 	if !strings.Contains(out, "Search logs") || !strings.Contains(out, `"parameters"`) {
 		t.Fatalf("api show output unexpected:\n%s", out)
 	}
+	// text mode appends a ready-to-run request example with the
+	// connection's org substituted; body methods get a --file hint
+	if !strings.Contains(out, "Call it with:") ||
+		!strings.Contains(out, "muxcat o2 request POST /api/default/_search --file <path|->") {
+		t.Fatalf("request example missing:\n%s", out)
+	}
 
 	// a concrete path resolves segment-wise to the parameterized spec path
 	out, err = runMuxcat(t, "o2", "api", "show", "/api/default/_search")

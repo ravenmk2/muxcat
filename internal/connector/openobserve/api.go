@@ -29,29 +29,29 @@ func newApiCmd() *cobra.Command {
 }
 
 // fetchSpec downloads and parses the server's OpenAPI spec, returning the
-// resolved connection name along with it. The endpoint lives at the server
+// resolved connection along with it. The endpoint lives at the server
 // root (not under /api/{org}); servers without it get a clear error
 // pointing at the official docs.
-func fetchSpec(cmd *cobra.Command) (string, map[string]any, error) {
-	name, _, cl, _, err := openForCmd(cmd)
+func fetchSpec(cmd *cobra.Command) (string, Connection, map[string]any, error) {
+	name, conn, cl, _, err := openForCmd(cmd)
 	if err != nil {
-		return "", nil, err
+		return "", Connection{}, nil, err
 	}
 	resp, err := cl.do(cmd.Context(), "GET", "/api-doc/openapi.json", nil)
 	if err != nil {
 		if resp != nil && resp.status == 404 {
-			return "", nil, output.NewError(output.CodeQueryError,
+			return "", Connection{}, nil, output.NewError(output.CodeQueryError,
 				"this server does not expose an OpenAPI spec at /api-doc/openapi.json",
 				"the spec endpoint exists on recent OpenObserve versions; explore endpoints in the official docs: https://openobserve.ai/docs/reference/api/")
 		}
-		return "", nil, err
+		return "", Connection{}, nil, err
 	}
 	var spec map[string]any
 	if err := json.Unmarshal(resp.body, &spec); err != nil {
-		return "", nil, output.NewError(output.CodeQueryError,
+		return "", Connection{}, nil, output.NewError(output.CodeQueryError,
 			"OpenAPI spec is not valid JSON: "+err.Error(), "")
 	}
-	return name, spec, nil
+	return name, conn, spec, nil
 }
 
 // specPaths returns the spec's paths object.
@@ -103,7 +103,7 @@ func newApiLsCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			start := time.Now()
-			name, spec, err := fetchSpec(cmd)
+			name, _, spec, err := fetchSpec(cmd)
 			if err != nil {
 				return err
 			}
@@ -139,7 +139,7 @@ func newApiShowCmd() *cobra.Command {
 		Args:  cli.ExactArgs(1, "<path>", "path"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
-			name, spec, err := fetchSpec(cmd)
+			name, conn, spec, err := fetchSpec(cmd)
 			if err != nil {
 				return err
 			}
@@ -152,8 +152,14 @@ func newApiShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Text mode appends a ready-to-run request example; the JSON
+			// envelope carries the raw fragment only.
+			value := string(pretty)
+			if example := requestExample(key, item, conn.org()); example != "" {
+				value += "\n\nCall it with:\n" + example
+			}
 			return cli.RenderResult(cmd, &output.Result{
-				Value:    string(pretty),
+				Value:    value,
 				JSONData: fragment,
 			}, meta(name, start, false))
 		},
@@ -186,6 +192,33 @@ func findPath(paths map[string]any, want string) (string, any, error) {
 			fmt.Sprintf("endpoint %q is ambiguous, matches: %s", want, strings.Join(matches, ", ")),
 			"give the exact spec path")
 	}
+}
+
+// requestExample builds ready-to-run request command lines for the
+// methods a path item supports. The {org}/{org_id} segment is replaced
+// with the connection's organization; body-carrying methods get a --file
+// hint.
+func requestExample(specPath string, item any, org string) string {
+	ops, _ := item.(map[string]any)
+	segs := strings.Split(specPath, "/")
+	for i, s := range segs {
+		if s == "{org_id}" || s == "{org}" {
+			segs[i] = org
+		}
+	}
+	path := strings.Join(segs, "/")
+	var lines []string
+	for _, m := range apiMethods {
+		if _, ok := ops[m]; !ok {
+			continue
+		}
+		line := "  muxcat o2 request " + strings.ToUpper(m) + " " + path
+		if m == "post" || m == "put" || m == "patch" {
+			line += " --file <path|->"
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // pathSegmentsMatch compares two paths segment by segment; a {param}
