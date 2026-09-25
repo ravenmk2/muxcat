@@ -289,3 +289,46 @@ func TestExitCodeMapping(t *testing.T) {
 		t.Errorf("ExitCode(plain) = %d, want %d", got, ExitGeneral)
 	}
 }
+
+func TestHighlight(t *testing.T) {
+	out := highlight(`{"a":1}`, "json")
+	if !strings.Contains(out, "\x1b[") {
+		t.Fatalf("highlight should emit ANSI escapes, got %q", out)
+	}
+	if !strings.Contains(out, `"a"`) {
+		t.Fatalf("highlight should keep the content, got %q", out)
+	}
+	plain := "not json"
+	if got := highlight(plain, "no-such-lexer"); got != plain {
+		t.Fatalf("unknown lexer should return input unchanged, got %q", got)
+	}
+}
+
+func TestRenderFallbackSyntax(t *testing.T) {
+	res := &Result{Value: map[string]any{"value": `{"a":1}`}, Bare: true, Syntax: "json"}
+
+	var colored bytes.Buffer
+	if err := NewRenderer(ModePlain, true).Render(&colored, res); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(colored.String(), "\x1b[") {
+		t.Fatalf("color on + Syntax should highlight, got %q", colored.String())
+	}
+
+	var plain bytes.Buffer
+	if err := NewRenderer(ModePlain, false).Render(&plain, res); err != nil {
+		t.Fatal(err)
+	}
+	if plain.String() != `{"a":1}`+"\n" {
+		t.Fatalf("color off should render bare and unhighlighted, got %q", plain.String())
+	}
+
+	// JSON rendering ignores Syntax.
+	var js bytes.Buffer
+	if err := NewRenderer(ModeJSON, false).Render(&js, res); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(js.String(), "\x1b[") {
+		t.Fatalf("json rendering must stay clean, got %q", js.String())
+	}
+}

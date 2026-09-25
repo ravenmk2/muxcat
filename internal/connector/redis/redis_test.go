@@ -587,3 +587,37 @@ func TestConnectorMounted(t *testing.T) {
 		t.Fatalf("connector ls should list redis: %q", out)
 	}
 }
+
+func TestResolveSyntax(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		flag  string
+		want  string
+	}{
+		{"auto detects a json object", `{"a":1}`, "", "json"},
+		{"auto detects a json array", `[1,2]`, "auto", "json"},
+		{"leading whitespace is fine", "  \n {\"a\":1}", "", "json"},
+		{"brace but invalid json", `{not json}`, "", ""},
+		{"plain string", "hello", "", ""},
+		{"none disables", `{"a":1}`, "none", ""},
+		{"explicit yaml", "a: 1", "yaml", "yaml"},
+		{"explicit toml", "a = 1", "toml", "toml"},
+		{"explicit json without sniffing", "not json at all", "json", "json"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveSyntax(tc.value, tc.flag)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("resolveSyntax(%q, %q) = %q, want %q", tc.value, tc.flag, got, tc.want)
+			}
+		})
+	}
+	if _, err := resolveSyntax("", "xml"); err == nil ||
+		output.ToError(err).Code != output.CodeMissingArgument {
+		t.Fatalf("invalid --syntax should be MISSING_ARGUMENT, got %v", err)
+	}
+}

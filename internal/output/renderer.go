@@ -13,8 +13,10 @@ import (
 // for JSON mode the envelope data prefers JSONData (e.g. query's rich
 // shape), then normalized Columns+Rows, then Value, then Message.
 // Bare asks text renderers to print a single-entry Value map as the bare
-// value without its label (e.g. redis get prints the value, not "value: x");
-// it has no effect on JSON rendering.
+// value without its label (e.g. redis get prints the value, not "value: x").
+// Syntax names a chroma lexer (json, yaml, toml, ...) for syntax
+// highlighting in text modes; it only takes effect when color is on.
+// Neither Bare nor Syntax affects JSON rendering.
 type Result struct {
 	Columns  []string
 	Rows     [][]any
@@ -22,6 +24,7 @@ type Result struct {
 	Value    any
 	Message  string
 	Bare     bool
+	Syntax   string
 }
 
 // Payload returns the normalized payload of the Result, used by JSON
@@ -57,11 +60,11 @@ func NewRenderer(mode Mode, color bool) Renderer {
 	case ModeJSON:
 		return jsonRenderer{}
 	case ModeTSV:
-		return tsvRenderer{}
+		return tsvRenderer{color: color}
 	case ModeTable:
 		return &tableRenderer{color: color}
 	default:
-		return plainRenderer{}
+		return plainRenderer{color: color}
 	}
 }
 
@@ -76,31 +79,37 @@ func cellString(v any) string {
 }
 
 // renderFallback handles non-tabular carriers (Value/Message); shared by
-// tsv/plain/table.
-func renderFallback(w io.Writer, r *Result) error {
+// tsv/plain/table. When color is on and Syntax names a lexer, the text is
+// syntax-highlighted before writing.
+func renderFallback(w io.Writer, r *Result, color bool) error {
+	var s string
 	switch {
 	case r.Message != "":
-		_, err := fmt.Fprintln(w, r.Message)
-		return err
+		s = r.Message
 	case r.Value != nil:
 		if m, ok := r.Value.(map[string]any); ok {
 			if r.Bare && len(m) == 1 {
 				for _, v := range m {
-					_, err := fmt.Fprintln(w, cellString(v))
-					return err
+					s = cellString(v)
 				}
-			}
-			for _, k := range sortedKeys(m) {
-				if _, err := fmt.Fprintf(w, "%s: %v\n", k, m[k]); err != nil {
-					return err
+			} else {
+				var b strings.Builder
+				for _, k := range sortedKeys(m) {
+					fmt.Fprintf(&b, "%s: %v\n", k, m[k])
 				}
+				s = strings.TrimRight(b.String(), "\n")
 			}
-			return nil
+		} else {
+			s = cellString(r.Value)
 		}
-		_, err := fmt.Fprintln(w, cellString(r.Value))
-		return err
+	default:
+		return nil
 	}
-	return nil
+	if color && r.Syntax != "" && s != "" {
+		s = highlight(s, r.Syntax)
+	}
+	_, err := fmt.Fprintln(w, s)
+	return err
 }
 
 func sortedKeys(m map[string]any) []string {
@@ -126,11 +135,13 @@ func (jsonRenderer) Render(w io.Writer, r *Result) error {
 }
 
 // tsvRenderer renders tab-separated text with a header row.
-type tsvRenderer struct{}
+type tsvRenderer struct {
+	color bool
+}
 
-func (tsvRenderer) Render(w io.Writer, r *Result) error {
+func (t tsvRenderer) Render(w io.Writer, r *Result) error {
 	if r.Columns == nil {
-		return renderFallback(w, r)
+		return renderFallback(w, r, t.color)
 	}
 	if _, err := fmt.Fprintln(w, strings.Join(r.Columns, "\t")); err != nil {
 		return err
@@ -148,11 +159,13 @@ func (tsvRenderer) Render(w io.Writer, r *Result) error {
 }
 
 // plainRenderer renders unadorned aligned text (the non-TTY degraded form).
-type plainRenderer struct{}
+type plainRenderer struct {
+	color bool
+}
 
-func (plainRenderer) Render(w io.Writer, r *Result) error {
+func (p plainRenderer) Render(w io.Writer, r *Result) error {
 	if r.Columns == nil {
-		return renderFallback(w, r)
+		return renderFallback(w, r, p.color)
 	}
 	widths := make([]int, len(r.Columns))
 	for i, c := range r.Columns {

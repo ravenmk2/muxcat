@@ -21,16 +21,25 @@ import (
 
 // replyResult builds the result for exec/eval replies. The JSON payload is
 // always the typed {type, value} shape; text modes render scalar replies as
-// the bare value and complex replies as indented JSON.
-func replyResult(r reply) *output.Result {
+// the bare value and complex replies as indented JSON. String scalars get
+// syntax highlighting per --syntax; complex replies are highlighted as the
+// JSON they are rendered in.
+func replyResult(r reply, syntaxFlag string) *output.Result {
 	res := &output.Result{JSONData: map[string]any{"type": r.Type, "value": r.Value}}
 	switch r.Type {
-	case "string", "integer", "double", "boolean", "null":
+	case "string":
+		res.Value = map[string]any{"value": r.Value}
+		res.Bare = true
+		if s, ok := r.Value.(string); ok {
+			res.Syntax, _ = resolveSyntax(s, syntaxFlag)
+		}
+	case "integer", "double", "boolean", "null":
 		res.Value = map[string]any{"value": r.Value}
 		res.Bare = true
 	default:
 		if b, err := json.MarshalIndent(r.Value, "", "  "); err == nil {
 			res.Value = string(b)
+			res.Syntax = "json"
 		}
 	}
 	return res
@@ -111,6 +120,9 @@ func newExecCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := checkSyntaxFlag(cmd); err != nil {
+				return err
+			}
 			ctx, cancel, client, err := dial(cmd, cfg, conn)
 			if err != nil {
 				return err
@@ -126,10 +138,11 @@ func newExecCmd() *cobra.Command {
 				return classifyErr(err, "command failed")
 			}
 			r, truncated := renderReply(v, binary, maxBytes)
-			return cli.RenderResult(cmd, replyResult(r), meta(name, start, truncated))
+			return cli.RenderResult(cmd, replyResult(r, cli.FlagString(cmd, "syntax")), meta(name, start, truncated))
 		},
 	}
 	addBinaryFlags(c)
+	addSyntaxFlag(c)
 	// Negative args (e.g. exec ZRANGE board 0 -1) are common; flags must
 	// come before positional arguments, everything after is an argument.
 	c.Flags().SetInterspersed(false)
@@ -154,6 +167,9 @@ func newGetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := checkSyntaxFlag(cmd); err != nil {
+				return err
+			}
 			ctx, cancel, client, err := dial(cmd, cfg, conn)
 			if err != nil {
 				return err
@@ -172,13 +188,18 @@ func newGetCmd() *cobra.Command {
 			default:
 				value, truncated = renderString(v, binary, maxBytes)
 			}
-			return cli.RenderResult(cmd, &output.Result{
+			res := &output.Result{
 				Value: map[string]any{"value": value},
 				Bare:  true,
-			}, meta(name, start, truncated))
+			}
+			if s, ok := value.(string); ok {
+				res.Syntax, _ = resolveSyntax(s, cli.FlagString(cmd, "syntax"))
+			}
+			return cli.RenderResult(cmd, res, meta(name, start, truncated))
 		},
 	}
 	addBinaryFlags(c)
+	addSyntaxFlag(c)
 	return c
 }
 
@@ -873,6 +894,9 @@ func newEvalCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := checkSyntaxFlag(cmd); err != nil {
+				return err
+			}
 			ctx, cancel, client, err := dial(cmd, cfg, conn)
 			if err != nil {
 				return err
@@ -894,13 +918,14 @@ func newEvalCmd() *cobra.Command {
 				return classifyErr(err, "eval failed")
 			}
 			r, truncated := renderReply(v, binary, maxBytes)
-			return cli.RenderResult(cmd, replyResult(r), meta(name, start, truncated))
+			return cli.RenderResult(cmd, replyResult(r, cli.FlagString(cmd, "syntax")), meta(name, start, truncated))
 		},
 	}
 	c.Flags().String("file", "", "read the script from a file (alternative to the script argument)")
 	c.Flags().StringArray("key", nil, "KEYS[] entry; repeatable, order preserved")
 	c.Flags().StringArray("arg", nil, "ARGV[] entry; repeatable, order preserved")
 	addBinaryFlags(c)
+	addSyntaxFlag(c)
 	return c
 }
 

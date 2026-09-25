@@ -45,8 +45,8 @@ Redis connector 接入 Redis standalone 实例（Redis 6+，含 Redis 8），驱
 
 | 命令 | 参数 / flag | data 形状 |
 |---|---|---|
-| `redis exec <cmd> [args...]` | `--binary hex\|base64`（默认 hex）、`--max-bytes N`（默认 4096） | `{type, value}`，type ∈ string/integer/array/map/null |
-| `redis get <key>` | `--binary`、`--max-bytes` | `{value}`，key 不存在 → `value: null` |
+| `redis exec <cmd> [args...]` | `--binary hex\|base64`（默认 hex）、`--max-bytes N`（默认 4096）、`--syntax` | `{type, value}`，type ∈ string/integer/double/boolean/array/map/null |
+| `redis get <key>` | `--binary`、`--max-bytes`、`--syntax` | `{value}`，key 不存在 → `value: null` |
 | `redis set <key> [value]` | `--ttl <duration>`（如 30s）、`--nx`、`--xx`、`--file <path>`（从文件读值，与位置参数互斥；二进制安全；`-` 读 stdin） | `{value}`，OK / null（nx/xx 条件不满足） |
 | `redis del <key> [key...]` | — | `{deleted: N}` |
 | `redis keys [pattern]` | `--limit N`（默认 1000，0 不截断） | columns/rows 单列 `key`；SCAN 实现，绝不使用 KEYS |
@@ -73,7 +73,7 @@ Redis connector 接入 Redis standalone 实例（Redis 6+，含 Redis 8），驱
 
 | 命令 | 参数 / flag | data 形状 |
 |---|---|---|
-| `redis eval <script>` | `--file <path>`（从文件读脚本，与位置参数二选一）、`--key`（可重复，顺序即 KEYS[]）、`--arg`（可重复，顺序即 ARGV[]）、`--binary`、`--max-bytes` | `{type, value}`，同 exec |
+| `redis eval <script>` | `--file <path>`（从文件读脚本，与位置参数二选一）、`--key`（可重复，顺序即 KEYS[]）、`--arg`（可重复，顺序即 ARGV[]）、`--binary`、`--max-bytes`、`--syntax` | `{type, value}`，同 exec |
 | `redis config get [pattern]` | `--binary`、`--max-bytes` | columns `field, value`；pattern 默认 `*` |
 
 exec/eval 的 `type` 枚举为 string/integer/double/boolean/array/map/null：go-redis 的通用应答不区分 simple string 与 bulk string，统一报 `string`；RESP3 的 double 报 `double`、bool 报 `boolean`，big number 以十进制字符串形式归入 `integer`。
@@ -94,6 +94,13 @@ connector 侧命令名分类，exec 与结构化命令共用一张分类表：
 - 渲染规则对 exec/eval 返回值递归生效（array/map 内每个字符串元素独立判定）。
 - 纯 integer/status 返回原样输出，不受渲染规则影响。
 - 文本模式（plain/tsv/table）下单值结果裸输出不带标签：get/set/ttl/type/dbsize/del/hget 直接打印值，key 不存在输出空行；exec/eval 的标量返回（string/integer/double/boolean/null）同样裸输出，复合返回（array/map）输出缩进 JSON。JSON envelope 的 data 形状不变。
+
+## 语法高亮
+
+- 仅文本模式且颜色开启（TTY）时生效；非 TTY 强制无色，管道输出永远干净，`--json` 不染。
+- get 与 exec/eval 的字符串标量返回：**自动检测 JSON**（首个非空白字符为 `{`/`[` 且 `json.Valid` 通过才染色，避免误判）；`--syntax json|yaml|toml` 显式指定（yaml/toml 无可靠特征，不自动检测），`--syntax none` 关闭。
+- exec/eval 的复合返回（array/map）以缩进 JSON 输出，恒按 JSON 高亮。
+- 实现：chroma（纯 Go lexer，非 parser），formatter 随终端色彩能力（truecolor/256/8）自适应，样式按终端背景明暗选 github/github-dark；先按 `--max-bytes` 截断再高亮。
 
 ## 错误映射
 

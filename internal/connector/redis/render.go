@@ -3,8 +3,10 @@ package redis
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 
@@ -23,6 +25,39 @@ const defaultMaxBytes = 4096
 func addBinaryFlags(c *cobra.Command) {
 	c.Flags().String("binary", "hex", "encoding for non-UTF-8 values: hex|base64")
 	c.Flags().Int("max-bytes", defaultMaxBytes, "maximum bytes kept per value; 0 disables truncation")
+}
+
+// addSyntaxFlag registers --syntax on value-returning commands.
+func addSyntaxFlag(c *cobra.Command) {
+	c.Flags().String("syntax", "", "syntax highlight string values: json|yaml|toml, none disables, empty auto-detects JSON")
+}
+
+// resolveSyntax maps --syntax to a chroma lexer name. Empty/auto sniffs
+// JSON (first non-space byte is { or [ and the value parses); none and
+// undetectable content disable highlighting. The flag value is validated
+// even when s carries no detectable syntax, so callers can fail fast.
+func resolveSyntax(s, flag string) (string, error) {
+	switch flag {
+	case "", "auto":
+		t := strings.TrimSpace(s)
+		if (strings.HasPrefix(t, "{") || strings.HasPrefix(t, "[")) && json.Valid([]byte(t)) {
+			return "json", nil
+		}
+		return "", nil
+	case "none":
+		return "", nil
+	case "json", "yaml", "toml":
+		return flag, nil
+	default:
+		return "", output.NewError(output.CodeMissingArgument,
+			"invalid --syntax value: "+flag, "valid values: json|yaml|toml|none|auto")
+	}
+}
+
+// checkSyntaxFlag validates --syntax before dialing.
+func checkSyntaxFlag(cmd *cobra.Command) error {
+	_, err := resolveSyntax("", cli.FlagString(cmd, "syntax"))
+	return err
 }
 
 // renderOpts resolves and validates the value-rendering flags.

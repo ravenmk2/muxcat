@@ -16,7 +16,7 @@ type tableRenderer struct {
 
 func (t *tableRenderer) Render(w io.Writer, r *Result) error {
 	if r.Columns == nil {
-		return renderFallback(w, r)
+		return renderFallback(w, r, t.color)
 	}
 	rows := make([][]string, len(r.Rows))
 	for i, row := range r.Rows {
