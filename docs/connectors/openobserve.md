@@ -1,6 +1,6 @@
 # openobserve connector
 
-OpenObserve connector 通过 OpenObserve 的 REST API（HTTP Basic Auth）接入，实现为纯 `net/http` 客户端，无外部驱动依赖（符合 `CGO_ENABLED=0` 基线）。命令名 `openobserve`，别名 `o2`。覆盖连接管理、stream 查看、数据查询（SQL / 上下文 around / 字段值 values）、日志摄入（ingest logs）与原生请求透传；`_bulk`、metrics/traces 摄入、users/functions/metrics 等管理类 API 不在本期范围。
+OpenObserve connector 通过 OpenObserve 的 REST API（HTTP Basic Auth）接入，实现为纯 `net/http` 客户端，无外部驱动依赖（符合 `CGO_ENABLED=0` 基线）。命令名 `openobserve`，别名 `o2`。覆盖连接管理、stream 查看、数据查询（SQL / 上下文 around / 字段值 values）、日志摄入（ingest logs）、原生请求透传（request）与 OpenAPI spec 探索（apidoc）；`_bulk`、metrics/traces 摄入、users/functions/metrics 等管理类 API 不在本期范围。
 
 API 核对的权威来源：官方文档（存在若干与实际不符之处，文中均已注明）+ 实例 Swagger UI `/swagger/index.html`（OpenAPI spec：`/api-doc/openapi.json`）+ 源码。
 
