@@ -38,6 +38,7 @@ muxcat/
 | MySQL | 📋 |
 | Postgres | 📋 |
 | Redis | 📋 |
+| etcd | 📋 |
 | MongoDB | 📋 |
 | ElasticSearch | 📋 |
 | OpenObserve | 📋 |
