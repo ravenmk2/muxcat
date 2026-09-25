@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +17,23 @@ import (
 	"github.com/ravenmk2/muxcat/internal/cli"
 	"github.com/ravenmk2/muxcat/internal/output"
 )
+
+// replyResult builds the result for exec/eval replies. The JSON payload is
+// always the typed {type, value} shape; text modes render scalar replies as
+// the bare value and complex replies as indented JSON.
+func replyResult(r reply) *output.Result {
+	res := &output.Result{JSONData: map[string]any{"type": r.Type, "value": r.Value}}
+	switch r.Type {
+	case "string", "integer", "double", "boolean", "null":
+		res.Value = map[string]any{"value": r.Value}
+		res.Bare = true
+	default:
+		if b, err := json.MarshalIndent(r.Value, "", "  "); err == nil {
+			res.Value = string(b)
+		}
+	}
+	return res
+}
 
 // resolveTarget loads the config and resolves a connection from
 // -c/--conn (falling back to defaultConnection).
@@ -107,9 +125,7 @@ func newExecCmd() *cobra.Command {
 				return classifyErr(err, "command failed")
 			}
 			r, truncated := renderReply(v, binary, maxBytes)
-			return cli.RenderResult(cmd, &output.Result{
-				Value: map[string]any{"type": r.Type, "value": r.Value},
-			}, meta(name, start, truncated))
+			return cli.RenderResult(cmd, replyResult(r), meta(name, start, truncated))
 		},
 	}
 	addBinaryFlags(c)
@@ -157,6 +173,7 @@ func newGetCmd() *cobra.Command {
 			}
 			return cli.RenderResult(cmd, &output.Result{
 				Value: map[string]any{"value": value},
+				Bare:  true,
 			}, meta(name, start, truncated))
 		},
 	}
@@ -212,6 +229,7 @@ func newSetCmd() *cobra.Command {
 			}
 			return cli.RenderResult(cmd, &output.Result{
 				Value: map[string]any{"value": value},
+				Bare:  true,
 			}, meta(name, start, false))
 		},
 	}
@@ -248,6 +266,7 @@ func newDelCmd() *cobra.Command {
 			}
 			return cli.RenderResult(cmd, &output.Result{
 				Value: map[string]any{"deleted": n},
+				Bare:  true,
 			}, meta(name, start, false))
 		},
 	}
@@ -335,6 +354,7 @@ func newTypeCmd() *cobra.Command {
 			}
 			return cli.RenderResult(cmd, &output.Result{
 				Value: map[string]any{"value": t},
+				Bare:  true,
 			}, meta(name, start, false))
 		},
 	}
@@ -388,6 +408,7 @@ func newTTLCmd() *cobra.Command {
 			}
 			return cli.RenderResult(cmd, &output.Result{
 				Value: map[string]any{"value": value},
+				Bare:  true,
 			}, meta(name, start, false))
 		},
 	}
@@ -489,6 +510,7 @@ func newDBSizeCmd() *cobra.Command {
 			}
 			return cli.RenderResult(cmd, &output.Result{
 				Value: map[string]any{"value": n},
+				Bare:  true,
 			}, meta(name, start, false))
 		},
 	}
@@ -532,6 +554,7 @@ func newHGetCmd() *cobra.Command {
 			}
 			return cli.RenderResult(cmd, &output.Result{
 				Value: map[string]any{"value": value},
+				Bare:  true,
 			}, meta(name, start, truncated))
 		},
 	}
@@ -838,9 +861,7 @@ func newEvalCmd() *cobra.Command {
 				return classifyErr(err, "eval failed")
 			}
 			r, truncated := renderReply(v, binary, maxBytes)
-			return cli.RenderResult(cmd, &output.Result{
-				Value: map[string]any{"type": r.Type, "value": r.Value},
-			}, meta(name, start, truncated))
+			return cli.RenderResult(cmd, replyResult(r), meta(name, start, truncated))
 		},
 	}
 	c.Flags().String("file", "", "read the script from a file (alternative to the script argument)")

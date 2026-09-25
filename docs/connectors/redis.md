@@ -93,6 +93,7 @@ connector 侧命令名分类，exec 与结构化命令共用一张分类表：
 - 单值超过 `--max-bytes`（默认 4096）时截断并置 `meta.truncated: true`；`--max-bytes 0` 不截断。
 - 渲染规则对 exec/eval 返回值递归生效（array/map 内每个字符串元素独立判定）。
 - 纯 integer/status 返回原样输出，不受渲染规则影响。
+- 文本模式（plain/tsv/table）下单值结果裸输出不带标签：get/set/ttl/type/dbsize/del/hget 直接打印值，key 不存在输出空行；exec/eval 的标量返回（string/integer/double/boolean/null）同样裸输出，复合返回（array/map）输出缩进 JSON。JSON envelope 的 data 形状不变。
 
 ## 错误映射
 

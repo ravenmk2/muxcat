@@ -12,12 +12,16 @@ import (
 // The tabular carrier (Columns+Rows) is used by table/plain/tsv rendering;
 // for JSON mode the envelope data prefers JSONData (e.g. query's rich
 // shape), then normalized Columns+Rows, then Value, then Message.
+// Bare asks text renderers to print a single-entry Value map as the bare
+// value without its label (e.g. redis get prints the value, not "value: x");
+// it has no effect on JSON rendering.
 type Result struct {
 	Columns  []string
 	Rows     [][]any
 	JSONData any
 	Value    any
 	Message  string
+	Bare     bool
 }
 
 // Payload returns the normalized payload of the Result, used by JSON
@@ -80,6 +84,12 @@ func renderFallback(w io.Writer, r *Result) error {
 		return err
 	case r.Value != nil:
 		if m, ok := r.Value.(map[string]any); ok {
+			if r.Bare && len(m) == 1 {
+				for _, v := range m {
+					_, err := fmt.Fprintln(w, cellString(v))
+					return err
+				}
+			}
 			for _, k := range sortedKeys(m) {
 				if _, err := fmt.Fprintf(w, "%s: %v\n", k, m[k]); err != nil {
 					return err

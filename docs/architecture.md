@@ -28,6 +28,7 @@ muxcat 是一个面向基础设施后端的统一命令行客户端：以内置 
   `{ok, data, meta:{connector, connection, elapsed_ms, truncated}, error:{code, message, hint?}}`。
   顶层字段恒定——`data`/`error` 缺省时输出 `null` 而非省略；`hint` 可选；query 类命令的 data 为 `columns`（带 type）+ `rows` 二维数组 + `row_count` + `rows_affected`（查询路径为 `null`，DML 路径为影响行数）。
 - 输出模式：`--output auto|table|plain|tsv|json`，`--json` 为快捷方式且优先于一切；解析优先级 flag > `props.defaults.output` > auto；auto 时 TTY→table、非 TTY→plain。
+- 裸值渲染：`Result.Value` 为单键 map 且标记 `Bare` 时，文本模式（plain/tsv/table）只输出值本身、不带 `key:` 标签（如 `redis get` 直接输出值），nil 值输出空行；JSON envelope 不受影响。
 - 降级：stdin/stdout 任一为管道视为非 TTY，auto 降级 plain 且**全局禁止交互**（缺必填参数直接报 `MISSING_ARGUMENT`，绝不等待输入）。
 - 颜色：`props.defaults.color`（auto|always|never）+ `--no-color` + `NO_COLOR` 环境变量共同决定；非 TTY 强制无色。真彩色靠 lipgloss/termenv 自动检测，不加独立配置。
 

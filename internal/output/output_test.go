@@ -173,6 +173,44 @@ func TestRenderFallbackMessage(t *testing.T) {
 	}
 }
 
+func TestRenderFallbackBare(t *testing.T) {
+	cases := []struct {
+		name string
+		res  *Result
+		want string
+	}{
+		{"single-entry map renders bare", &Result{Value: map[string]any{"value": "hello"}, Bare: true}, "hello\n"},
+		{"nil value renders empty line", &Result{Value: map[string]any{"value": nil}, Bare: true}, "\n"},
+		{"multi-entry map ignores bare", &Result{Value: map[string]any{"a": 1, "b": 2}, Bare: true}, "a: 1\nb: 2\n"},
+		{"without bare the label stays", &Result{Value: map[string]any{"value": "hello"}}, "value: hello\n"},
+		{"scalar value unaffected", &Result{Value: "raw", Bare: true}, "raw\n"},
+	}
+	for _, tc := range cases {
+		for _, mode := range []Mode{ModeTSV, ModePlain, ModeTable} {
+			var buf bytes.Buffer
+			if err := NewRenderer(mode, false).Render(&buf, tc.res); err != nil {
+				t.Fatalf("%s/%s: %v", tc.name, mode, err)
+			}
+			if buf.String() != tc.want {
+				t.Fatalf("%s/%s render = %q, want %q", tc.name, mode, buf.String(), tc.want)
+			}
+		}
+	}
+	// JSON rendering is unaffected by Bare.
+	var buf bytes.Buffer
+	res := &Result{Value: map[string]any{"value": "hello"}, Bare: true}
+	if err := NewRenderer(ModeJSON, false).Render(&buf, res); err != nil {
+		t.Fatal(err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &data); err != nil {
+		t.Fatal(err)
+	}
+	if data["value"] != "hello" {
+		t.Fatalf("json payload = %v, want value hello", data)
+	}
+}
+
 func TestEnvelopeSuccessShape(t *testing.T) {
 	var buf bytes.Buffer
 	env := Success(map[string]any{"n": 1}, Meta{Connector: "sqlite", Connection: "local", ElapsedMS: 3, Truncated: true})
