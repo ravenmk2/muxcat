@@ -75,7 +75,7 @@ Redis connector 接入 Redis standalone 实例（Redis 6+，含 Redis 8），驱
 | 命令 | 参数 / flag | data 形状 |
 |---|---|---|
 | `redis eval <script>` | `--file <path>`（从文件读脚本，与位置参数二选一）、`--key`（可重复，顺序即 KEYS[]）、`--arg`（可重复，顺序即 ARGV[]）、`--binary`、`--max-bytes`、`--highlight` | `{type, value}`，同 exec |
-| `redis config get [pattern]` | `--binary`、`--max-bytes` | columns `field, value`；pattern 默认 `*` |
+| `redis config get [pattern]` | `--binary`、`--max-bytes` | columns `field, value`；pattern 默认 `*`；凭据类参数（requirepass/masterauth）的值脱敏为 `***`（空值保持空，可判断是否已设置） |
 
 exec/eval 的 `type` 枚举为 string/integer/double/boolean/array/map/null：go-redis 的通用应答不区分 simple string 与 bulk string，统一报 `string`；RESP3 的 double 报 `double`、bool 报 `boolean`，big number 以十进制字符串形式归入 `integer`。
 

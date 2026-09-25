@@ -982,7 +982,7 @@ func newConfigGetCmd() *cobra.Command {
 			rows := make([][]any, 0, len(fields))
 			truncated := false
 			for _, f := range fields {
-				v, tr := renderString(m[f], binary, maxBytes)
+				v, tr := renderString(maskConfigValue(f, m[f]), binary, maxBytes)
 				truncated = truncated || tr
 				rows = append(rows, []any{f, v})
 			}
@@ -996,4 +996,20 @@ func newConfigGetCmd() *cobra.Command {
 	}
 	addBinaryFlags(c)
 	return c
+}
+
+// sensitiveConfigFields are CONFIG GET parameters whose values are
+// credentials; they are masked in output.
+var sensitiveConfigFields = map[string]bool{
+	"requirepass": true,
+	"masterauth":  true,
+}
+
+// maskConfigValue masks credential-bearing config values. An empty value
+// stays empty so it remains possible to tell whether a credential is set.
+func maskConfigValue(field, value string) string {
+	if sensitiveConfigFields[field] && value != "" {
+		return "***"
+	}
+	return value
 }

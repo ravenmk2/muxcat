@@ -571,6 +571,23 @@ func TestParseInfo(t *testing.T) {
 	}
 }
 
+func TestMaskConfigValue(t *testing.T) {
+	cases := []struct {
+		field, value, want string
+	}{
+		{"requirepass", "s3cret", "***"},
+		{"masterauth", "s3cret", "***"},
+		{"requirepass", "", ""}, // empty stays empty: credential not set
+		{"maxmemory", "1073741824", "1073741824"},
+		{"tls-key-file", "/etc/redis/key.pem", "/etc/redis/key.pem"}, // path, not a secret
+	}
+	for _, c := range cases {
+		if got := maskConfigValue(c.field, c.value); got != c.want {
+			t.Errorf("maskConfigValue(%q, %q) = %q, want %q", c.field, c.value, got, c.want)
+		}
+	}
+}
+
 func TestConfigJSONShape(t *testing.T) {
 	// The config model must serialize with camelCase field names.
 	c := Config{
