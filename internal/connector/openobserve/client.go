@@ -1,7 +1,8 @@
 // Package openobserve implements muxcat's OpenObserve connector: a plain
 // net/http client for OpenObserve's REST API (HTTP basic auth). Streams,
-// SQL search, and raw request passthrough are covered; ingestion and admin
-// APIs (users/functions/metrics) are out of scope for the first iteration.
+// SQL query (with around/values), log ingestion, and raw request
+// passthrough are covered; metrics/traces ingestion and admin APIs
+// (users/functions/metrics) are out of scope.
 package openobserve
 
 import (
@@ -45,7 +46,8 @@ func New() *cobra.Command {
 	c.AddCommand(
 		newConnCmd(),
 		newStreamCmd(),
-		newSearchCmd(),
+		newQueryCmd(),
+		newIngestCmd(),
 		newRequestCmd(),
 	)
 	return c

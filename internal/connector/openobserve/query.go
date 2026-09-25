@@ -34,11 +34,12 @@ var lastDurations = map[string]time.Duration{
 
 const lastValues = "5m|15m|30m|1h|3h|6h|12h|24h|2d|7d"
 
-func newSearchCmd() *cobra.Command {
+func newQueryCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:   "search [<sql>]",
-		Short: "Search logs with SQL (POST /api/{org}/_search)",
-		Args:  cobra.MaximumNArgs(1),
+		Use:     "query [<sql>]",
+		Aliases: []string{"search"},
+		Short:   "Query logs with SQL (POST /api/{org}/_search)",
+		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			sql, err := resolveSQL(cmd, args)
@@ -103,6 +104,7 @@ func newSearchCmd() *cobra.Command {
 	c.Flags().String("last", "", "relative time window shortcut: "+lastValues+" (mutually exclusive with --start-time/--end-time)")
 	c.Flags().Int("from", 0, "offset of the first hit (maps to the API's from field)")
 	c.Flags().Int("size", 100, "maximum number of hits (maps to the API's size field)")
+	c.AddCommand(newQueryAroundCmd(), newQueryValuesCmd())
 	return c
 }
 

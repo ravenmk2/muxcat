@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -65,10 +68,14 @@ func setupEnv(t *testing.T) {
 // o2Server is a fake OpenObserve server for tests.
 type o2Server struct {
 	*httptest.Server
-	mu         sync.Mutex
-	searchBody map[string]any
-	authUser   string
-	authPass   string
+	mu          sync.Mutex
+	searchBody  map[string]any
+	authUser    string
+	authPass    string
+	aroundQuery string
+	valuesQuery string
+	ingestBody  []byte
+	ingestPath  string
 }
 
 func newO2Server(t *testing.T) *o2Server {
@@ -114,6 +121,45 @@ func newO2Server(t *testing.T) *o2Server {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"code":20004,"message":"unknown field 'servce'","suggestions":["service"]}`))
 	})
+	mux.HandleFunc("/api/default/app/_around", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		s.aroundQuery = r.URL.RawQuery
+		s.mu.Unlock()
+		if r.URL.Query().Get("key") == "" || r.URL.Query().Get("size") == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"took":5,"hits":[{"_timestamp":1674213225158000,"log":"around line","code":200}],"total":1,"from":0,"size":6,"scan_size":0.1}`))
+	})
+	mux.HandleFunc("/api/default/app/_values", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		s.valuesQuery = r.URL.RawQuery
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("no_count") == "true" {
+			_, _ = w.Write([]byte(`{"took":3,"hits":[{"field":"level","values":[{"zo_sql_key":"info"},{"zo_sql_key":"error"}]}],"total":1}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"took":3,"hits":[{"field":"level","values":[{"zo_sql_key":"info","zo_sql_num":5},{"zo_sql_key":"error","zo_sql_num":2}]},{"field":"code","values":[{"zo_sql_key":"200","zo_sql_num":4}]}],"total":2}`))
+	})
+	ingestHandler := func(fail bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			s.mu.Lock()
+			s.ingestBody, s.ingestPath = body, r.URL.Path
+			s.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			if fail {
+				_, _ = w.Write([]byte(`{"code":200,"status":[{"name":"flaky","successful":1,"failed":1,"error":"simulated failure"}]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"code":200,"status":[{"name":"app","successful":2,"failed":0,"error":""}]}`))
+		}
+	}
+	mux.HandleFunc("/api/default/app/_json", ingestHandler(false))
+	mux.HandleFunc("/api/default/app/_multi", ingestHandler(false))
+	mux.HandleFunc("/api/default/flaky/_json", ingestHandler(true))
 	mux.HandleFunc("/api/default/echo", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"method": r.Method})
@@ -133,6 +179,37 @@ func (s *o2Server) lastAuth() (string, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.authUser, s.authPass
+}
+
+func (s *o2Server) lastAroundQuery() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.aroundQuery
+}
+
+func (s *o2Server) lastValuesQuery() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.valuesQuery
+}
+
+func (s *o2Server) lastIngest() (string, []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ingestPath, s.ingestBody
+}
+
+// runMuxcatIn runs a command with the given stdin content.
+func runMuxcatIn(t *testing.T, stdin string, args ...string) (string, error) {
+	t.Helper()
+	root := cli.NewRoot("test")
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetIn(strings.NewReader(stdin))
+	root.SetArgs(args)
+	err := root.Execute()
+	return buf.String(), err
 }
 
 func (s *o2Server) addConn(t *testing.T, name string, extra ...string) {
@@ -256,7 +333,7 @@ func TestSearchTextAndJSON(t *testing.T) {
 	s := newO2Server(t)
 	s.addConn(t, "local")
 
-	out, err := runMuxcat(t, "o2", "search", "SELECT * FROM app")
+	out, err := runMuxcat(t, "o2", "query", "SELECT * FROM app")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +351,7 @@ func TestSearchTextAndJSON(t *testing.T) {
 	}
 
 	// JSON mode keeps the raw _search response.
-	env := runJSON(t, "o2", "search", "SELECT * FROM app")
+	env := runJSON(t, "o2", "query", "SELECT * FROM app")
 	data := env["data"].(map[string]any)
 	if data["took"].(float64) != 12 || data["total"].(float64) != 2 {
 		t.Fatalf("JSON mode did not keep the raw response: %v", data)
@@ -301,7 +378,7 @@ func TestSearchTimeFlags(t *testing.T) {
 	s := newO2Server(t)
 	s.addConn(t, "local")
 
-	if _, err := runMuxcat(t, "o2", "search", "SELECT * FROM app", "--last", "15m"); err != nil {
+	if _, err := runMuxcat(t, "o2", "query", "SELECT * FROM app", "--last", "15m"); err != nil {
 		t.Fatal(err)
 	}
 	q := s.lastSearchBody()["query"].(map[string]any)
@@ -310,17 +387,17 @@ func TestSearchTimeFlags(t *testing.T) {
 	}
 
 	// --last is mutually exclusive with --start-time/--end-time.
-	_, err := runMuxcat(t, "o2", "search", "SELECT * FROM app", "--last", "15m", "--start-time", "-2h")
+	_, err := runMuxcat(t, "o2", "query", "SELECT * FROM app", "--last", "15m", "--start-time", "-2h")
 	if output.ToError(err).Code != output.CodeMissingArgument {
 		t.Fatalf("mutual exclusion code = %v", output.ToError(err))
 	}
 	// Invalid --last enum value.
-	_, err = runMuxcat(t, "o2", "search", "SELECT * FROM app", "--last", "42m")
+	_, err = runMuxcat(t, "o2", "query", "SELECT * FROM app", "--last", "42m")
 	if output.ToError(err).Code != output.CodeConfigInvalid {
 		t.Fatalf("invalid --last code = %v", output.ToError(err))
 	}
 	// Explicit absolute window (microseconds).
-	_, err = runMuxcat(t, "o2", "search", "SELECT * FROM app",
+	_, err = runMuxcat(t, "o2", "query", "SELECT * FROM app",
 		"--start-time", "1674000000000000", "--end-time", "1674003600000000")
 	if err != nil {
 		t.Fatal(err)
@@ -330,7 +407,7 @@ func TestSearchTimeFlags(t *testing.T) {
 		t.Fatalf("start_time = %v", q["start_time"])
 	}
 	// start >= end rejected.
-	_, err = runMuxcat(t, "o2", "search", "SELECT * FROM app", "--start-time", "-1h", "--end-time", "-2h")
+	_, err = runMuxcat(t, "o2", "query", "SELECT * FROM app", "--start-time", "-1h", "--end-time", "-2h")
 	if output.ToError(err).Code != output.CodeConfigInvalid {
 		t.Fatalf("inverted window code = %v", output.ToError(err))
 	}
@@ -393,7 +470,7 @@ func TestSearchErrorMapping(t *testing.T) {
 
 	// End to end: the server's hint/suggestions pass through into the
 	// structured error, mapped to QUERY_ERROR (exit 5).
-	_, err := runMuxcat(t, "o2", "search", "SELECT servce FROM app")
+	_, err := runMuxcat(t, "o2", "query", "SELECT servce FROM app")
 	e := output.ToError(err)
 	if e.Code != output.CodeQueryError {
 		t.Fatalf("code = %v, want %s", e, output.CodeQueryError)
@@ -466,7 +543,7 @@ func TestRequestReadonly(t *testing.T) {
 		t.Fatalf("readonly exit = %d, want %d", got, output.ExitExec)
 	}
 	// search is read-only and always allowed.
-	if _, err := runMuxcat(t, "o2", "-c", "ro", "search", "SELECT * FROM app"); err != nil {
+	if _, err := runMuxcat(t, "o2", "-c", "ro", "query", "SELECT * FROM app"); err != nil {
 		t.Fatalf("readonly search should pass: %v", err)
 	}
 }
@@ -514,5 +591,192 @@ func TestSchemaValidation(t *testing.T) {
 	invalid := []byte(`{"version":1,"instances":{"local":{"url":"http://x","extra":1}}}`)
 	if err := schema.Validate(FileName, invalid); err == nil {
 		t.Fatal("config with unknown instance field accepted")
+	}
+}
+
+func TestQueryAlias(t *testing.T) {
+	setupEnv(t)
+	s := newO2Server(t)
+	s.addConn(t, "local")
+
+	// The search alias reaches the same SQL command and the subcommands.
+	if _, err := runMuxcat(t, "o2", "search", "SELECT * FROM app"); err != nil {
+		t.Fatalf("search alias failed: %v", err)
+	}
+	if _, err := runMuxcat(t, "o2", "search", "values", "app", "--fields", "level"); err != nil {
+		t.Fatalf("search alias to values failed: %v", err)
+	}
+	if _, err := runMuxcat(t, "o2", "search", "around", "app", "--key", "1674213225158000"); err != nil {
+		t.Fatalf("search alias to around failed: %v", err)
+	}
+}
+
+func TestQueryAround(t *testing.T) {
+	setupEnv(t)
+	s := newO2Server(t)
+	s.addConn(t, "local")
+
+	out, err := runMuxcat(t, "o2", "query", "around", "app", "--key", "1674213225158000", "--size", "6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "around line") {
+		t.Fatalf("around output unexpected:\n%s", out)
+	}
+	q := s.lastAroundQuery()
+	if !strings.Contains(q, "key=1674213225158000") || !strings.Contains(q, "size=6") {
+		t.Fatalf("around query = %q", q)
+	}
+
+	// JSON mode keeps the raw response.
+	env := runJSON(t, "o2", "query", "around", "app", "--key", "1674213225158000")
+	if env["data"].(map[string]any)["took"].(float64) != 5 {
+		t.Fatalf("around JSON not raw: %v", env["data"])
+	}
+
+	// --key is required; --size 1 hits the server-side unlimited quirk guard.
+	if _, err := runMuxcat(t, "o2", "query", "around", "app"); output.ToError(err).Code != output.CodeMissingArgument {
+		t.Fatalf("missing --key code = %v", output.ToError(err))
+	}
+	if _, err := runMuxcat(t, "o2", "query", "around", "app", "--key", "1674213225158000", "--size", "1"); output.ToError(err).Code != output.CodeConfigInvalid {
+		t.Fatalf("--size 1 code = %v", output.ToError(err))
+	}
+
+	// Non-logs stream type is passed through.
+	if _, err := runMuxcat(t, "o2", "query", "around", "app", "--key", "1674213225158000", "--type", "traces"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(s.lastAroundQuery(), "type=traces") {
+		t.Fatalf("type not passed: %q", s.lastAroundQuery())
+	}
+}
+
+func TestQueryValues(t *testing.T) {
+	setupEnv(t)
+	s := newO2Server(t)
+	s.addConn(t, "local")
+
+	out, err := runMuxcat(t, "o2", "query", "values", "app", "--fields", "level, code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"field", "value", "count", "level", "info", "error", "200"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("values output missing %q:\n%s", want, out)
+		}
+	}
+	q, _ := url.ParseQuery(s.lastValuesQuery())
+	if q.Get("fields") != "level,code" {
+		t.Fatalf("fields = %q (whitespace not trimmed)", q.Get("fields"))
+	}
+	if q.Get("from") != "0" || q.Get("size") != "10" || q.Get("no_count") != "false" {
+		t.Fatalf("defaults wrong: %q", s.lastValuesQuery())
+	}
+	if diff, _ := strconv.ParseInt(q.Get("end_time"), 10, 64); diff <= 0 {
+		t.Fatalf("end_time missing: %q", s.lastValuesQuery())
+	} else if st, _ := strconv.ParseInt(q.Get("start_time"), 10, 64); diff-st != int64(time.Hour/time.Microsecond) {
+		t.Fatalf("default window = %d µs, want 1h", diff-st)
+	}
+
+	// --fields is required.
+	if _, err := runMuxcat(t, "o2", "query", "values", "app"); output.ToError(err).Code != output.CodeMissingArgument {
+		t.Fatalf("missing --fields code = %v", output.ToError(err))
+	}
+
+	// --no-count: count cells empty, server saw no_count=true.
+	out, err = runMuxcat(t, "o2", "query", "values", "app", "--fields", "level", "--no-count")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q, _ := url.ParseQuery(s.lastValuesQuery()); q.Get("no_count") != "true" {
+		t.Fatalf("no_count not passed: %q", s.lastValuesQuery())
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 3 { // header + 2 values
+		t.Fatalf("no-count output lines = %d:\n%s", len(lines), out)
+	}
+
+	// JSON mode keeps the raw response.
+	env := runJSON(t, "o2", "query", "values", "app", "--fields", "level")
+	hits := env["data"].(map[string]any)["hits"].([]any)
+	if hits[0].(map[string]any)["values"].([]any)[0].(map[string]any)["zo_sql_key"] != "info" {
+		t.Fatalf("values JSON not raw: %v", hits[0])
+	}
+}
+
+func TestIngestLogs(t *testing.T) {
+	setupEnv(t)
+	s := newO2Server(t)
+	s.addConn(t, "local")
+
+	// --file path
+	f := filepath.Join(t.TempDir(), "logs.json")
+	if err := os.WriteFile(f, []byte(`[{"a":1},{"a":2}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runMuxcat(t, "o2", "ingest", "logs", "app", "--file", f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "successful") {
+		t.Fatalf("ingest output unexpected:\n%s", out)
+	}
+	path, body := s.lastIngest()
+	if path != "/api/default/app/_json" || string(body) != `[{"a":1},{"a":2}]` {
+		t.Fatalf("ingest = %s %s", path, body)
+	}
+
+	// --file - (stdin)
+	if _, err := runMuxcatIn(t, `[{"b":1}]`, "o2", "ingest", "logs", "app", "--file", "-"); err != nil {
+		t.Fatalf("--file - failed: %v", err)
+	}
+	if _, body := s.lastIngest(); string(body) != `[{"b":1}]` {
+		t.Fatalf("stdin body = %s", body)
+	}
+
+	// no --file: stdin is read implicitly when piped
+	if _, err := runMuxcatIn(t, `{"c":1}`+"\n"+`{"c":2}`, "o2", "ingest", "logs", "app", "--format", "multi"); err != nil {
+		t.Fatalf("implicit stdin failed: %v", err)
+	}
+	if path, _ := s.lastIngest(); path != "/api/default/app/_multi" {
+		t.Fatalf("multi path = %s", path)
+	}
+
+	// client-side pre-validation
+	if _, err := runMuxcatIn(t, `{"not":"array"}`, "o2", "ingest", "logs", "app"); output.ToError(err).Code != output.CodeConfigInvalid {
+		t.Fatalf("non-array json code = %v", output.ToError(err))
+	}
+	_, err = runMuxcatIn(t, `{"ok":1}`+"\nbad-line", "o2", "ingest", "logs", "app", "--format", "multi")
+	if e := output.ToError(err); e.Code != output.CodeConfigInvalid || !strings.Contains(e.Message, "line 2") {
+		t.Fatalf("bad multi line = %v", e)
+	}
+
+	// readonly connection is rejected before any HTTP call
+	s.addConn(t, "ro", "--readonly")
+	_, err = runMuxcatIn(t, `[{"a":1}]`, "o2", "-c", "ro", "ingest", "logs", "app")
+	if e := output.ToError(err); e.Code != output.CodeReadonlyViolation {
+		t.Fatalf("readonly ingest code = %v", e)
+	}
+
+	// partial failure: exit 0, failed count visible, stderr warning
+	out, err = runMuxcat(t, "o2", "ingest", "logs", "flaky", "--file", f)
+	if err != nil {
+		t.Fatalf("partial failure should exit 0: %v", err)
+	}
+	if !strings.Contains(out, "failed") || !strings.Contains(out, "Warning: 1 record(s) failed to ingest") {
+		t.Fatalf("partial failure not surfaced:\n%s", out)
+	}
+	// JSON mode carries the raw response without the stderr side note.
+	env := runJSON(t, "o2", "ingest", "logs", "flaky", "--file", f)
+	if env["data"].(map[string]any)["status"].([]any)[0].(map[string]any)["failed"].(float64) != 1 {
+		t.Fatalf("ingest JSON not raw: %v", env["data"])
+	}
+	if strings.Contains(fmt.Sprint(env), "Warning") {
+		t.Fatalf("JSON mode must not carry the warning: %v", env)
+	}
+
+	// bare ingest prints help
+	if _, err := runMuxcat(t, "o2", "ingest"); err != nil {
+		t.Fatalf("bare ingest should print help: %v", err)
 	}
 }

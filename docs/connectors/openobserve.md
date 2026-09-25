@@ -1,6 +1,8 @@
 # openobserve connector
 
-OpenObserve connector 通过 OpenObserve 的 REST API（HTTP Basic Auth）接入，实现为纯 `net/http` 客户端，无外部驱动依赖（符合 `CGO_ENABLED=0` 基线）。命令名 `openobserve`，别名 `o2`。第一版覆盖连接管理、stream 查看、SQL 搜索与原生请求透传；摄入（ingest）、`_values`、users/functions/metrics 等管理类 API 不在本期范围。
+OpenObserve connector 通过 OpenObserve 的 REST API（HTTP Basic Auth）接入，实现为纯 `net/http` 客户端，无外部驱动依赖（符合 `CGO_ENABLED=0` 基线）。命令名 `openobserve`，别名 `o2`。覆盖连接管理、stream 查看、数据查询（SQL / 上下文 around / 字段值 values）、日志摄入（ingest logs）与原生请求透传；`_bulk`、metrics/traces 摄入、users/functions/metrics 等管理类 API 不在本期范围。
+
+API 核对的权威来源：官方文档（存在若干与实际不符之处，文中均已注明）+ 实例 Swagger UI `/swagger/index.html`（OpenAPI spec：`/api-doc/openapi.json`）+ 源码。
 
 ## 配置模型（openobserve.json）
 
@@ -49,11 +51,15 @@ OpenObserve connector 通过 OpenObserve 的 REST API（HTTP Basic Auth）接入
 
 flag 命名与取值对齐官方 API 的 query 参数（`type` / `fetchSchema`）。
 
-### search
+### query 组
+
+`query` 是数据查询命令组（别名 `search`：`o2 search ...` 与 `o2 query ...` 完全等效，含子命令）。
+
+#### query（SQL）
 
 ```
-o2 search [<sql> | --sql-file <path|->] [--start-time T] [--end-time T]
-          [--from N] [--size N] [--last 枚举]
+o2 query [<sql> | --sql-file <path|->] [--start-time T] [--end-time T]
+         [--from N] [--size N] [--last 枚举]
 ```
 
 `POST /api/{org}/_search`，请求体 `{query:{sql, start_time, end_time, from, size}, timeout}`：
@@ -63,6 +69,7 @@ o2 search [<sql> | --sql-file <path|->] [--start-time T] [--end-time T]
 - `--last` 为常用时间窗枚举快捷方式：`5m|15m|30m|1h|3h|6h|12h|24h|2d|7d`（对齐 O2 UI 相对时间档），与 `--start-time/--end-time` 互斥；缺省等效 `--last 1h`。
 - `--from`（默认 0）、`--size`（默认 100）与 API 字段同名同义。
 - 全局 `--timeout` 同时作为 HTTP 客户端超时与 API 的 `timeout` 字段（秒）。
+- `_search` 实际还有 query 参数 `type` / `is_ui_histogram` / `is_multi_stream_search` / `validate`（HTML 文档漏写，以实例 Swagger `/api-doc/openapi.json` 为准），本期未使用。
 
 **渲染**：
 
@@ -71,6 +78,38 @@ o2 search [<sql> | --sql-file <path|->] [--start-time T] [--end-time T]
 - 查询统计（took/total/scan_size）不进文本表格，保留在 JSON 原样响应中。
 
 **错误透传**：服务端结构化错误体 `{code, message, hint?, suggestions?}`（如 20004 字段不存在、20005 函数未定义）映射为 `QUERY_ERROR`，`hint`/`suggestions` 拼入 envelope 的 `error.hint`，便于人与 AI 调用方自纠错。
+
+#### query around
+
+```
+o2 query around <stream> --key <µs|RFC3339> [--size 10] [--type logs|metrics|traces]
+```
+
+`GET /api/{org}/{stream}/_around?key=&size=`：以 `--key` 为锚点取上下文日志。服务端固定 **±15 分钟**窗口，`size` 为总预算、新旧两侧各取 `size/2`（整除）。**quirk**：`size=1` 时 `size/2=0` 被服务端视为不限量（返回 ±15m 内全部记录），故客户端强制 `size >= 2`（违反报 `CONFIG_INVALID`）。`--key` 接受微秒/RFC3339/负相对量/`now`（锚点不要求命中真实记录）。渲染与错误透传同 query（SQL）。
+
+#### query values
+
+```
+o2 query values <stream> --fields f1[,f2...] [--size 10] [--from 0] [--keyword k]
+                [--no-count] [--type logs|metrics|traces] [时间窗 flags]
+```
+
+`GET /api/{org}/{stream}/_values`：枚举字段在指定时间窗内的取值（日志排查高频操作，如"level 都有哪些值"）。`--fields` 必填，逗号分隔（同官方）；时间窗 flags 与 query 相同（缺省 1h）；`--keyword` 过滤取值、`--no-count` 省略出现次数、`--from` 翻页。响应 `{hits:[{field, values:[{zo_sql_key, zo_sql_num}]}]}`：`--json` 原样；文本合并为一张表 `field, value, count`（`zo_sql_key`→value、`zo_sql_num`→count，no-count 时 count 为空），适合管道处理。
+
+### ingest 组
+
+```
+o2 ingest logs <stream> [--file <path|->] [--format json|multi]
+```
+
+摄入日志记录：`--format json` 走 `POST /api/{org}/{stream}/_json`（JSON 数组），`--format multi` 走 `_multi`（NDJSON，每行一个对象）。
+
+- **数据源优先级**：`--file <path>` / `--file -`（stdin）> 无 `--file` 时 stdin 非 TTY 自动读（管道/重定向直接可用）> stdin 是 TTY 时报 `MISSING_ARGUMENT`。
+- **客户端预检**：json 必须是合法 JSON 数组；multi 逐非空行必须是合法 JSON（失败报行号）。明显坏数据本地报 `CONFIG_INVALID`，不打到服务端。
+- **readonly 连接拒绝**（`READONLY_VIOLATION`）。
+- 响应 `{code, status:[{name, successful, failed, error}]}`：`--json` 原样；文本列 `stream, successful, failed, error`。**failed 合计 > 0 时退出码仍为 0**（完成的交换即报告），文本模式额外向 stderr 打一行警告。
+
+**演进预留**：`ingest` 是组命令，`logs` 为显式子命令；metrics/traces 槽位留给后续迭代——metrics 可走已存在的 `POST /api/{org}/ingest/metrics/_json`（JSON 数组 `[{__name__, __type__, 标签..., _timestamp, value}]`），traces 走 OTLP `POST /api/{org}/v1/traces`。本期需要时可 `o2 request` 透传。
 
 ### request
 
@@ -92,8 +131,8 @@ o2 request <method> <path> [--file <path|->]
 | HTTP 401 / 403 | `AUTH_FAILED` | 4 |
 | 连接拒绝、无此主机 | `CONNECT_FAILED` | 3 |
 | 超时（客户端或 context deadline） | `TIMEOUT` | 3 |
-| 其余非 2xx（含 search 的 20001~20013） | `QUERY_ERROR` | 5 |
-| readonly 连接的写方法（request） | `READONLY_VIOLATION` | 5 |
+| 其余非 2xx（含 _search 的 20001~20013） | `QUERY_ERROR` | 5 |
+| readonly 连接的写操作（request 非 GET/HEAD、ingest） | `READONLY_VIOLATION` | 5 |
 | request 的非 2xx 完成交换 | 不报错（data 原样报告 status） | 0 |
 
 ## _meta 组织
@@ -113,13 +152,13 @@ OpenObserve 内置系统组织 `_meta`，身兼两职：自监控数据存储（
 
 使用方式：
 
-- 查自监控流：建一个 `_meta` 组织的连接（`o2 conn add meta --url ... --org _meta --username ...`），之后 `o2 -c meta stream ls` / `o2 -c meta search ...` 与常规流无异。
+- 查自监控流：建一个 `_meta` 组织的连接（`o2 conn add meta --url ... --org _meta --username ...`），之后 `o2 -c meta stream ls` / `o2 -c meta query ...` 与常规流无异。
 - 调集群端点：`o2 request GET /api/_meta/node/list`（request 的 path 自由书写，无需专门连接）。
 - 注意 `_meta` 端点在 org 检查之上还叠加角色校验（如 announcements/config 需 _meta 管理员）；此时 403 映射为 `AUTH_FAILED`，语义实为"权限不足"而非"凭据无效"。
 
 ## 已知限制
 
-- 摄入（`_json`/`_multi`/`_bulk`）、`stream values`（`_values`）、users/functions/metrics 管理 API 不在第一版；需要时可用 `request` 透传。
-- `search` 未暴露 `search_type` / `agent_options` 参数（分区模式、csv/md_table 输出）；muxcat 自身的渲染器覆盖表格需求，其余可用 `request` 透传。
-- 文本模式动态列以 hits 首现顺序为准；超宽行（几十列）第一版不做列裁剪，受全局 `--limit` 控制行数。
+- `_bulk`（ES 兼容批量）、metrics/traces 摄入、users/functions/metrics 管理 API 不在本期；需要时可用 `request` 透传。
+- `query` 未暴露 `search_type` / `agent_options` 参数（分区模式、csv/md_table 输出）；muxcat 自身的渲染器覆盖表格需求，其余可用 `request` 透传。
+- 文本模式动态列以 hits 首现顺序为准；超宽行（几十列）本期不做列裁剪，受全局 `--limit` 控制行数。
 - TLS 由 url scheme 决定，不支持自定义 CA / 跳过证书校验（后续迭代按需加）。
