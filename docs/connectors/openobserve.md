@@ -96,6 +96,27 @@ o2 request <method> <path> [--file <path|->]
 | readonly 连接的写方法（request） | `READONLY_VIOLATION` | 5 |
 | request 的非 2xx 完成交换 | 不报错（data 原样报告 status） | 0 |
 
+## _meta 组织
+
+OpenObserve 内置系统组织 `_meta`，身兼两职：自监控数据存储（服务端自身的 logs/metrics/traces 流），以及一组集群管理端点的强制宿主。以下端点在 handler 层强制 `org_id == _meta`（OSS 源码 `META_ORG_ID` 检查），对其他 org 调用返回 403 "only available for the _meta organization"：
+
+| 端点 | 用途 |
+|---|---|
+| `GET /api/_meta/cluster/info` | 集群各 region/节点的待压缩任务数。官方文档写作 `/api/{org}/cluster_info`，org 与路径两处均与实际不符 |
+| `GET /api/_meta/node/list` | 节点列表（含 `version`、角色、资源指标）；`conn test` 的版本 fallback 数据源 |
+| `GET/PUT /api/_meta/announcements/config` | 公告横幅配置；横幅面向所有组织渲染，故发布权收归 _meta，且另需 _meta 管理员角色 |
+| `POST /api/_meta/organizations/assume_service_account` | 扮演服务账号（企业版） |
+| `GET/PUT /api/_meta/domain_management` | 域名管理（企业版） |
+| `GET/PUT /api/_meta/settings/password_policy` | 密码策略 |
+
+易混淆但**不限** `_meta`：`GET /api/{org}/announcements`（任何 org 可读当前生效横幅，数据物理存在 _meta 但读取开放）；`GET /api/{org}/password_complexity`（登录页需要，源码刻意保持各 org 可读）。
+
+使用方式：
+
+- 查自监控流：建一个 `_meta` 组织的连接（`o2 conn add meta --url ... --org _meta --username ...`），之后 `o2 -c meta stream ls` / `o2 -c meta search ...` 与常规流无异。
+- 调集群端点：`o2 request GET /api/_meta/node/list`（request 的 path 自由书写，无需专门连接）。
+- 注意 `_meta` 端点在 org 检查之上还叠加角色校验（如 announcements/config 需 _meta 管理员）；此时 403 映射为 `AUTH_FAILED`，语义实为"权限不足"而非"凭据无效"。
+
 ## 已知限制
 
 - 摄入（`_json`/`_multi`/`_bulk`）、`stream values`（`_values`）、users/functions/metrics 管理 API 不在第一版；需要时可用 `request` 透传。
