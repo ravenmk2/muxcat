@@ -794,7 +794,7 @@ func TestApiLs(t *testing.T) {
 	s := newO2Server(t)
 	s.addConn(t, "local")
 
-	out, err := runMuxcat(t, "o2", "api", "ls")
+	out, err := runMuxcat(t, "o2", "apidoc", "ls")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -805,7 +805,7 @@ func TestApiLs(t *testing.T) {
 	}
 
 	// keyword filter (case-insensitive, matches path or summary)
-	out, err = runMuxcat(t, "o2", "api", "ls", "--keyword", "VALUES")
+	out, err = runMuxcat(t, "o2", "apidoc", "ls", "--keyword", "VALUES")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -814,7 +814,7 @@ func TestApiLs(t *testing.T) {
 	}
 
 	// JSON mode yields the structured entry list
-	env := runJSON(t, "o2", "api", "ls", "--keyword", "streams")
+	env := runJSON(t, "o2", "apidoc", "ls", "--keyword", "streams")
 	entries := env["data"].([]any)
 	if len(entries) != 1 || entries[0].(map[string]any)["path"] != "/api/{org_id}/streams" {
 		t.Fatalf("api ls JSON unexpected: %v", entries)
@@ -827,7 +827,7 @@ func TestApiShow(t *testing.T) {
 	s.addConn(t, "local")
 
 	// exact spec path
-	out, err := runMuxcat(t, "o2", "api", "show", "/api/{org_id}/_search")
+	out, err := runMuxcat(t, "o2", "apidoc", "show", "/api/{org_id}/_search")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -842,7 +842,7 @@ func TestApiShow(t *testing.T) {
 	}
 
 	// a concrete path resolves segment-wise to the parameterized spec path
-	out, err = runMuxcat(t, "o2", "api", "show", "/api/default/_search")
+	out, err = runMuxcat(t, "o2", "apidoc", "show", "/api/default/_search")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -851,13 +851,13 @@ func TestApiShow(t *testing.T) {
 	}
 
 	// unknown endpoint
-	_, err = runMuxcat(t, "o2", "api", "show", "/api/default/_nope")
+	_, err = runMuxcat(t, "o2", "apidoc", "show", "/api/default/_nope")
 	if e := output.ToError(err); e.Code != output.CodeQueryError {
 		t.Fatalf("unknown path code = %v", e)
 	}
 
 	// JSON mode carries the raw fragment
-	env := runJSON(t, "o2", "api", "show", "/api/{org_id}/streams")
+	env := runJSON(t, "o2", "apidoc", "show", "/api/{org_id}/streams")
 	frag := env["data"].(map[string]any)
 	if frag["/api/{org_id}/streams"].(map[string]any)["get"].(map[string]any)["summary"] != "List streams" {
 		t.Fatalf("api show JSON unexpected: %v", frag)
@@ -871,7 +871,7 @@ func TestApiSpecMissing(t *testing.T) {
 	t.Cleanup(s.Close)
 	s.addConn(t, "local")
 
-	_, err := runMuxcat(t, "o2", "api", "ls")
+	_, err := runMuxcat(t, "o2", "apidoc", "ls")
 	e := output.ToError(err)
 	if e.Code != output.CodeQueryError || !strings.Contains(e.Hint, "openobserve.ai/docs") {
 		t.Fatalf("spec-missing error = %v (hint %q)", e, e.Hint)

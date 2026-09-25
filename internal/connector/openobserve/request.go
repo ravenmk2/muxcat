@@ -39,8 +39,8 @@ the status code; only transport failures become errors. On readonly
 connections only GET/HEAD are allowed.
 
 Discover available endpoints from the server's OpenAPI spec first:
-  muxcat o2 api ls [--keyword k]   # list endpoints (method, path, summary)
-  muxcat o2 api show <path>        # show one endpoint's spec fragment`,
+  muxcat o2 apidoc ls [--keyword k]   # list endpoints (method, path, summary)
+  muxcat o2 apidoc show <path>        # show one endpoint's spec fragment`,
 		Args: cli.ExactArgs(2, "<method> <path>", "method", "path"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()

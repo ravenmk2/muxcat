@@ -16,15 +16,15 @@ import (
 // apiMethods is the set of HTTP methods carried by an OpenAPI path item.
 var apiMethods = []string{"get", "post", "put", "patch", "delete", "head", "options"}
 
-func newApiCmd() *cobra.Command {
+func newApiDocCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:   "api",
+		Use:   "apidoc",
 		Short: "Explore the server's OpenAPI spec (/api-doc/openapi.json)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
 	}
-	c.AddCommand(newApiLsCmd(), newApiShowCmd())
+	c.AddCommand(newApiDocLsCmd(), newApiDocShowCmd())
 	return c
 }
 
@@ -60,7 +60,7 @@ func specPaths(spec map[string]any) map[string]any {
 	return paths
 }
 
-// apiEntry is one method+path row of the api ls table.
+// apiEntry is one method+path row of the apidoc ls table.
 type apiEntry struct {
 	Method  string `json:"method"`
 	Path    string `json:"path"`
@@ -96,7 +96,7 @@ func listEntries(spec map[string]any, keyword string) []apiEntry {
 	return entries
 }
 
-func newApiLsCmd() *cobra.Command {
+func newApiDocLsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "ls",
 		Short: "List endpoints of the server's OpenAPI spec",
@@ -132,7 +132,7 @@ func entriesOrEmpty(entries []apiEntry) []apiEntry {
 	return entries
 }
 
-func newApiShowCmd() *cobra.Command {
+func newApiDocShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "show <path>",
 		Short: "Show the OpenAPI spec fragment of one endpoint",
@@ -184,7 +184,7 @@ func findPath(paths map[string]any, want string) (string, any, error) {
 	case 0:
 		return "", nil, output.NewError(output.CodeQueryError,
 			"endpoint not found in the OpenAPI spec: "+want,
-			"list available endpoints with o2 api ls (optionally --keyword)")
+			"list available endpoints with o2 apidoc ls (optionally --keyword)")
 	case 1:
 		return matches[0], paths[matches[0]], nil
 	default:
