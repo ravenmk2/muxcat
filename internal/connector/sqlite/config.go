@@ -32,7 +32,7 @@ type Config struct {
 	Version           int                   `json:"version"`
 	Instances         map[string]Instance   `json:"instances,omitempty"`
 	Connections       map[string]Connection `json:"connections,omitempty"`
-	DefaultConnection string                `json:"default_connection,omitempty"`
+	DefaultConnection string                `json:"defaultConnection,omitempty"`
 }
 
 // loadConfig reads sqlite.json; a missing file yields an empty config.
@@ -83,7 +83,7 @@ func saveConfig(c *Config) error {
 }
 
 // resolve resolves a connection from the -c/--conn flag, falling back to
-// default_connection.
+// defaultConnection.
 func resolve(cfg *Config, flagConn string) (string, Connection, error) {
 	name := flagConn
 	if name == "" {

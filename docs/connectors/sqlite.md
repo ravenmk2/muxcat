@@ -13,13 +13,13 @@ SQLite 是 muxcat 的首个 connector，也是后续 connector 设计文档的�
   "connections": {
     "local": { "instance": "local", "readonly": false, "timeout": "5s" }
   },
-  "default_connection": "local"
+  "defaultConnection": "local"
 }
 ```
 
 - `instances`：名字 → `{path}`。path 支持 `~` 展开。sqlite 无密码字段。
 - `connections`：名字 → `{instance, readonly?, timeout?}`；`timeout` 为 Go duration 字符串（如 `5s`），覆盖全局 `--timeout`。
-- `default_connection`：缺省连接名；`-c/--conn` 未指定时使用，两者皆无报 `CONN_NOT_FOUND`。
+- `defaultConnection`：缺省连接名；`-c/--conn` 未指定时使用，两者皆无报 `CONN_NOT_FOUND`。
 - `conn add <name>` 同名创建 instance 与 connection（instance 名 = 连接名）；`conn rm` 删除连接时，同名 instance 无其他引用则一并删除。
 
 ## 命令

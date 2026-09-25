@@ -12,7 +12,7 @@ muxcat 是一个面向基础设施后端的统一命令行客户端：以内置 
 
 - 配置目录：`os.UserHomeDir()/.config/muxcat/`，全平台统一；环境变量 `MUXCAT_HOME` 覆盖。
 - `config.json` 为主配置，`version` + `props` 两层；`props.defaults` 存 `output`/`color`/`timeout`/`limit` 等默认值。`config get/set` 的点路径对 config.json 隐式补 `props.` 前缀。
-- 每个 connector 各自一个 JSON 文件（如 `sqlite.json`），`version` + `instances` / `connections` / `default_connection` 扁平结构。
+- 每个 connector 各自一个 JSON 文件（如 `sqlite.json`），`version` + `instances` / `connections` / `defaultConnection` 扁平结构。
 - 文件权限 0600（Windows 上尽力而为）；写入一律临时文件 + rename 原子写，JSON 两空格缩进。
 - `muxcat config validate [file...]` 用 `go:embed` 进二进制的 JSON Schema（Draft 2020-12，`schema/` 目录）校验，无参时校验配置目录下全部已知文件。
 

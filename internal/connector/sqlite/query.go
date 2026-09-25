@@ -30,7 +30,7 @@ func isQuery(sqlText string) bool {
 }
 
 // resolveTarget loads the config and resolves a connection from
-// -c/--conn (falling back to default_connection).
+// -c/--conn (falling back to defaultConnection).
 func resolveTarget(cmd *cobra.Command) (*Config, string, Connection, error) {
 	cfg, err := loadConfig()
 	if err != nil {

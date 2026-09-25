@@ -22,7 +22,7 @@
           "type": "object",
           "additionalProperties": { "$ref": "#/$defs/connection" }
         },
-        "default_connection": { "type": "string" }
+        "defaultConnection": { "type": "string" }
       }
     }
   }

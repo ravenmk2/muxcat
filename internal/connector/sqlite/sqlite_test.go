@@ -87,7 +87,7 @@ func TestConnLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.DefaultConnection != "local" {
-		t.Fatalf("default_connection = %q, want local", cfg.DefaultConnection)
+		t.Fatalf("defaultConnection = %q, want local", cfg.DefaultConnection)
 	}
 	conn := cfg.Connections["local"]
 	if conn.Instance != "local" || conn.Readonly {
@@ -122,7 +122,7 @@ func TestConnLifecycle(t *testing.T) {
 		t.Fatal("unreferenced instance should be removed")
 	}
 	if cfg.DefaultConnection != "" {
-		t.Fatalf("default_connection should be cleared, got %q", cfg.DefaultConnection)
+		t.Fatalf("defaultConnection should be cleared, got %q", cfg.DefaultConnection)
 	}
 }
 
