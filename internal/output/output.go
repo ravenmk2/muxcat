@@ -32,6 +32,7 @@ const (
 	CodeReadonlyViolation    = "READONLY_VIOLATION"
 	CodeUnsupportedOperation = "UNSUPPORTED_OPERATION"
 	CodeConnectorUnknown     = "CONNECTOR_UNKNOWN"
+	CodeUpgradeFailed        = "UPGRADE_FAILED"
 	CodeGeneral              = "GENERAL" // fallback outside the enum, only for wrapping unknown errors
 )
 
@@ -70,7 +71,7 @@ func ExitCode(err error) int {
 		return ExitConnect
 	case CodeAuthFailed:
 		return ExitAuth
-	case CodeQueryError, CodeReadonlyViolation:
+	case CodeQueryError, CodeReadonlyViolation, CodeUpgradeFailed:
 		return ExitExec
 	default:
 		return ExitGeneral

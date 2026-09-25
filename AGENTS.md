@@ -12,6 +12,7 @@ muxcat/
 │   ├── config/          # 配置读写、原子写、点路径 get/set、MUXCAT_HOME
 │   ├── secret/          # keychain/env 主密钥、AES-256-GCM、enc:v1: blob
 │   ├── output/          # Renderer、envelope、TTY/降级检测、退出码
+│   ├── upgrade/         # 自更新：GitHub release 查询、带重试下载、checksum 校验、自替换
 │   └── connector/       # connector 注册表及各 connector 实现
 ├── schema/              # JSON Schema（Draft 2020-12，go:embed）与校验实现
 ├── docs/                # 设计文档
@@ -23,6 +24,7 @@ muxcat/
 文档变化时同步更新
 
 - docs/architecture.md：总体架构——三层模型、配置、安全、输出契约
+- docs/upgrade.md：自更新设计——upgrade 命令、下载重试、平台自替换
 - docs/connectors/：每个 connector 一份独立设计文档
 
 ## 路线图
@@ -32,6 +34,7 @@ muxcat/
 | 项目 | 状态 |
 |---|---|
 | 工程骨架 + SQLite | ✅ |
+| 自更新 upgrade | ✅ |
 | MySQL | 📋 |
 | Postgres | 📋 |
 | Redis | 📋 |

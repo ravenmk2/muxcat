@@ -44,9 +44,9 @@ muxcat 是一个面向基础设施后端的统一命令行客户端：以内置 
 | 4 | 认证失败 |
 | 5 | 执行错误 |
 
-错误码枚举：`MISSING_ARGUMENT`、`CONN_NOT_FOUND`、`CONFIG_INVALID`、`KEY_UNAVAILABLE`、`CONNECT_FAILED`、`AUTH_FAILED`、`TIMEOUT`、`QUERY_ERROR`、`READONLY_VIOLATION`、`UNSUPPORTED_OPERATION`、`CONNECTOR_UNKNOWN`。
+错误码枚举：`MISSING_ARGUMENT`、`CONN_NOT_FOUND`、`CONFIG_INVALID`、`KEY_UNAVAILABLE`、`CONNECT_FAILED`、`AUTH_FAILED`、`TIMEOUT`、`QUERY_ERROR`、`READONLY_VIOLATION`、`UNSUPPORTED_OPERATION`、`CONNECTOR_UNKNOWN`、`UPGRADE_FAILED`。
 
-命令返回结构化 `*output.Error`，root 统一渲染（`--json` 时 envelope 到 stdout，否则 stderr 纯文本 + hint）并按错误码映射退出码。映射规则：缺参/用法类 → 2；连接类（含 `TIMEOUT`）→ 3；认证类 → 4；执行类（`QUERY_ERROR`、`READONLY_VIOLATION`）→ 5；其余 → 1。
+命令返回结构化 `*output.Error`，root 统一渲染（`--json` 时 envelope 到 stdout，否则 stderr 输出 `Error:`/`Hint:` 行，TTY 下标签高亮——Error 红色加粗、Hint 蓝色，消息体不染色）并按错误码映射退出码。映射规则：缺参/用法类 → 2；连接类（含 `TIMEOUT`）→ 3；认证类 → 4；执行类（`QUERY_ERROR`、`READONLY_VIOLATION`、`UPGRADE_FAILED`）→ 5；其余 → 1。
 
 ## 工程约定
 
@@ -64,6 +64,7 @@ muxcat/
 │   ├── config/            # 配置目录解析、Load/Save（原子写）、点路径 Get/Set
 │   ├── secret/            # 主密钥（keychain/MUXCAT_KEY）、AES-256-GCM 加解密
 │   ├── output/            # Renderer（json/tsv/table/plain）、envelope、TTY/颜色决策、退出码与错误码
+│   ├── upgrade/           # 自更新：GitHub release 查询、带重试下载、checksum 校验、自替换（见 docs/upgrade.md）
 │   └── connector/
 │       ├── registry.go    # connector 注册表
 │       └── sqlite/        # SQLite connector（见 docs/connectors/sqlite.md）

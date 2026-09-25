@@ -5,9 +5,12 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-isatty"
+	"github.com/muesli/termenv"
 	"github.com/spf13/cobra"
 
 	"github.com/ravenmk2/muxcat/internal/connector"
@@ -69,6 +72,7 @@ func NewRoot(version string) *cobra.Command {
 
 	root.AddCommand(newConfigCmd())
 	root.AddCommand(newConnectorCmd())
+	root.AddCommand(newUpgradeCmd(version))
 	for _, c := range connector.Commands() {
 		root.AddCommand(c)
 	}
@@ -78,8 +82,9 @@ func NewRoot(version string) *cobra.Command {
 
 // Execute runs the root command and returns the exit code. It is the
 // program's single error exit: structured errors returned by commands are
-// rendered here uniformly (envelope to stdout with --json, plain text to
-// stderr otherwise) and mapped to exit codes by error code.
+// rendered here uniformly (envelope to stdout with --json, plain text with
+// highlighted Error:/Hint: labels to stderr otherwise) and mapped to exit
+// codes by error code.
 func Execute(version string) int {
 	root := NewRoot(version)
 	if err := root.Execute(); err != nil {
@@ -94,12 +99,33 @@ func exitError(root *cobra.Command, err error) int {
 	if jsonOut {
 		_ = output.WriteEnvelope(os.Stdout, output.Failure(e, output.Meta{}))
 	} else {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", e.Message)
-		if e.Hint != "" {
-			fmt.Fprintf(os.Stderr, "Hint: %s\n", e.Hint)
-		}
+		noColor, _ := root.PersistentFlags().GetBool("no-color")
+		color := output.ResolveColor(loadDefaults().color, noColor, isatty.IsTerminal(os.Stderr.Fd()))
+		renderError(os.Stderr, e, color)
 	}
 	return output.ExitCode(e)
+}
+
+// renderError writes the plain-text error form (the stderr path), with the
+// Error:/Hint: labels highlighted when color is on. The message bodies stay
+// unstyled so pipes and logs lose nothing but the ANSI labels.
+func renderError(w io.Writer, e *output.Error, color bool) {
+	r := lipgloss.DefaultRenderer()
+	if color {
+		// The color decision is already made (ResolveColor on stderr's
+		// TTY); force the profile so lipgloss's own stdout-based detection
+		// cannot veto it.
+		r.SetColorProfile(termenv.TrueColor)
+	}
+	errStyle, hintStyle := r.NewStyle(), r.NewStyle()
+	if color {
+		errStyle = errStyle.Bold(true).Foreground(lipgloss.Color("#E06C75"))
+		hintStyle = hintStyle.Foreground(lipgloss.Color("#2D9CDB"))
+	}
+	_, _ = fmt.Fprintf(w, "%s %s\n", errStyle.Render("Error:"), e.Message)
+	if e.Hint != "" {
+		_, _ = fmt.Fprintf(w, "%s %s\n", hintStyle.Render("Hint:"), e.Hint)
+	}
 }
 
 // ExactArgs validates the positional argument count; a missing argument
