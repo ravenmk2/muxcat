@@ -27,12 +27,24 @@ func addBinaryFlags(c *cobra.Command) {
 	c.Flags().Int("max-bytes", defaultMaxBytes, "maximum bytes kept per value; 0 disables truncation")
 }
 
-// addSyntaxFlag registers --syntax on value-returning commands.
-func addSyntaxFlag(c *cobra.Command) {
-	c.Flags().String("syntax", "", "syntax highlight string values: json|yaml|toml, none disables, empty auto-detects JSON")
+// addHighlightFlag registers --highlight (and its hidden --hl alias) on
+// value-returning commands.
+func addHighlightFlag(c *cobra.Command) {
+	c.Flags().String("highlight", "", "syntax highlight string values: json|yaml|toml, none disables, empty auto-detects JSON")
+	c.Flags().String("hl", "", "alias for --highlight")
+	_ = c.Flags().MarkHidden("hl")
 }
 
-// resolveSyntax maps --syntax to a chroma lexer name. Empty/auto sniffs
+// highlightFlag returns the --highlight/--hl value; --hl wins when both
+// are given.
+func highlightFlag(cmd *cobra.Command) string {
+	if cmd.Flags().Changed("hl") {
+		return cli.FlagString(cmd, "hl")
+	}
+	return cli.FlagString(cmd, "highlight")
+}
+
+// resolveSyntax maps --highlight to a chroma lexer name. Empty/auto sniffs
 // JSON (first non-space byte is { or [ and the value parses); none and
 // undetectable content disable highlighting. The flag value is validated
 // even when s carries no detectable syntax, so callers can fail fast.
@@ -50,13 +62,13 @@ func resolveSyntax(s, flag string) (string, error) {
 		return flag, nil
 	default:
 		return "", output.NewError(output.CodeMissingArgument,
-			"invalid --syntax value: "+flag, "valid values: json|yaml|toml|none|auto")
+			"invalid --highlight value: "+flag, "valid values: json|yaml|toml|none|auto")
 	}
 }
 
-// checkSyntaxFlag validates --syntax before dialing.
-func checkSyntaxFlag(cmd *cobra.Command) error {
-	_, err := resolveSyntax("", cli.FlagString(cmd, "syntax"))
+// checkHighlightFlag validates --highlight before dialing.
+func checkHighlightFlag(cmd *cobra.Command) error {
+	_, err := resolveSyntax("", highlightFlag(cmd))
 	return err
 }
 

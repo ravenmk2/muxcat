@@ -621,3 +621,16 @@ func TestResolveSyntax(t *testing.T) {
 		t.Fatalf("invalid --syntax should be MISSING_ARGUMENT, got %v", err)
 	}
 }
+
+// TestHighlightFlagAlias verifies --highlight and its --hl alias both reach
+// validation before dialing (invalid value fails without a server).
+func TestHighlightFlagAlias(t *testing.T) {
+	setupEnv(t)
+	addConn(t, "down", "--port", "1", "--timeout", "2s", "--set-default")
+	for _, flag := range []string{"--highlight", "--hl"} {
+		_, err := runMuxcat(t, "redis", "get", "k", flag, "bad")
+		if e := output.ToError(err); err == nil || e.Code != output.CodeMissingArgument {
+			t.Fatalf("%s bad: err=%v", flag, err)
+		}
+	}
+}

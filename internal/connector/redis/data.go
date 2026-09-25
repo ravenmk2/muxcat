@@ -120,7 +120,7 @@ func newExecCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := checkSyntaxFlag(cmd); err != nil {
+			if err := checkHighlightFlag(cmd); err != nil {
 				return err
 			}
 			ctx, cancel, client, err := dial(cmd, cfg, conn)
@@ -138,11 +138,11 @@ func newExecCmd() *cobra.Command {
 				return classifyErr(err, "command failed")
 			}
 			r, truncated := renderReply(v, binary, maxBytes)
-			return cli.RenderResult(cmd, replyResult(r, cli.FlagString(cmd, "syntax")), meta(name, start, truncated))
+			return cli.RenderResult(cmd, replyResult(r, highlightFlag(cmd)), meta(name, start, truncated))
 		},
 	}
 	addBinaryFlags(c)
-	addSyntaxFlag(c)
+	addHighlightFlag(c)
 	// Negative args (e.g. exec ZRANGE board 0 -1) are common; flags must
 	// come before positional arguments, everything after is an argument.
 	c.Flags().SetInterspersed(false)
@@ -167,7 +167,7 @@ func newGetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := checkSyntaxFlag(cmd); err != nil {
+			if err := checkHighlightFlag(cmd); err != nil {
 				return err
 			}
 			ctx, cancel, client, err := dial(cmd, cfg, conn)
@@ -193,13 +193,13 @@ func newGetCmd() *cobra.Command {
 				Bare:  true,
 			}
 			if s, ok := value.(string); ok {
-				res.Syntax, _ = resolveSyntax(s, cli.FlagString(cmd, "syntax"))
+				res.Syntax, _ = resolveSyntax(s, highlightFlag(cmd))
 			}
 			return cli.RenderResult(cmd, res, meta(name, start, truncated))
 		},
 	}
 	addBinaryFlags(c)
-	addSyntaxFlag(c)
+	addHighlightFlag(c)
 	return c
 }
 
@@ -894,7 +894,7 @@ func newEvalCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := checkSyntaxFlag(cmd); err != nil {
+			if err := checkHighlightFlag(cmd); err != nil {
 				return err
 			}
 			ctx, cancel, client, err := dial(cmd, cfg, conn)
@@ -918,14 +918,14 @@ func newEvalCmd() *cobra.Command {
 				return classifyErr(err, "eval failed")
 			}
 			r, truncated := renderReply(v, binary, maxBytes)
-			return cli.RenderResult(cmd, replyResult(r, cli.FlagString(cmd, "syntax")), meta(name, start, truncated))
+			return cli.RenderResult(cmd, replyResult(r, highlightFlag(cmd)), meta(name, start, truncated))
 		},
 	}
 	c.Flags().String("file", "", "read the script from a file (alternative to the script argument)")
 	c.Flags().StringArray("key", nil, "KEYS[] entry; repeatable, order preserved")
 	c.Flags().StringArray("arg", nil, "ARGV[] entry; repeatable, order preserved")
 	addBinaryFlags(c)
-	addSyntaxFlag(c)
+	addHighlightFlag(c)
 	return c
 }
 
