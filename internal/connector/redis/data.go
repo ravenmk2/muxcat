@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -183,15 +184,46 @@ func newGetCmd() *cobra.Command {
 
 func newSetCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:   "set <key> <value>",
+		Use:   "set <key> [value]",
 		Short: "Set a key (OK, or null when the --nx/--xx condition is not met)",
-		Args:  cli.ExactArgs(2, "<key> <value>", "key", "value"),
+		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			nx, xx := cli.FlagBool(cmd, "nx"), cli.FlagBool(cmd, "xx")
 			if nx && xx {
 				return output.NewError(output.CodeMissingArgument,
 					"--nx and --xx are mutually exclusive", "")
+			}
+			file := cli.FlagString(cmd, "file")
+			var value string
+			switch {
+			case len(args) == 2 && file != "":
+				return output.NewError(output.CodeMissingArgument,
+					"value argument and --file are mutually exclusive", "")
+			case len(args) == 2:
+				value = args[1]
+			case file == "-":
+				if cli.RuntimeFrom(cmd.Context()).Interactive {
+					return output.NewError(output.CodeMissingArgument,
+						"--file - reads the value from stdin, but stdin is a terminal",
+						"pipe the value in, or pass a file path")
+				}
+				raw, err := io.ReadAll(os.Stdin)
+				if err != nil {
+					return output.NewError(output.CodeMissingArgument,
+						"cannot read value from stdin: "+err.Error(), "")
+				}
+				value = string(raw)
+			case file != "":
+				raw, err := os.ReadFile(file)
+				if err != nil {
+					return output.NewError(output.CodeMissingArgument,
+						"cannot read value file "+file+": "+err.Error(), "")
+				}
+				value = string(raw)
+			default:
+				return output.NewError(output.CodeMissingArgument,
+					"missing value (usage: "+cmd.CommandPath()+" <key> <value> or --file <path>)", "")
 			}
 			cfg, name, conn, err := resolveTarget(cmd)
 			if err != nil {
@@ -214,21 +246,21 @@ func newSetCmd() *cobra.Command {
 			} else if xx {
 				mode = "XX"
 			}
-			v, err := client.SetArgs(ctx, args[0], args[1], goredis.SetArgs{
+			v, err := client.SetArgs(ctx, args[0], value, goredis.SetArgs{
 				Mode: mode,
 				TTL:  ttl,
 			}).Result()
-			var value any
+			var out any
 			switch {
 			case errors.Is(err, goredis.Nil):
-				value = nil
+				out = nil
 			case err != nil:
 				return classifyErr(err, "set failed")
 			default:
-				value = v
+				out = v
 			}
 			return cli.RenderResult(cmd, &output.Result{
-				Value: map[string]any{"value": value},
+				Value: map[string]any{"value": out},
 				Bare:  true,
 			}, meta(name, start, false))
 		},
@@ -236,6 +268,7 @@ func newSetCmd() *cobra.Command {
 	c.Flags().Duration("ttl", 0, "expiration (e.g. 30s, 5m); 0 keeps the key persistent")
 	c.Flags().Bool("nx", false, "set only if the key does not exist")
 	c.Flags().Bool("xx", false, "set only if the key already exists")
+	c.Flags().String("file", "", "read the value from a file (binary-safe; - reads stdin)")
 	return c
 }
 

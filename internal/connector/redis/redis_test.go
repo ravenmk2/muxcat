@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -423,6 +425,38 @@ func TestConnectFailedUnreachable(t *testing.T) {
 	}
 	if output.ExitCode(e) != output.ExitConnect {
 		t.Fatalf("exit = %d, want %d", output.ExitCode(e), output.ExitConnect)
+	}
+}
+
+// TestSetFromFile covers the --file value source of redis set: conflict with
+// the positional value, a missing value, an unreadable file (fails before
+// dialing), and a readable file (reaches the dial stage on a closed port).
+func TestSetFromFile(t *testing.T) {
+	setupEnv(t)
+	addConn(t, "down", "--port", "1", "--timeout", "2s", "--set-default")
+
+	_, err := runMuxcat(t, "redis", "set", "k", "v", "--file", "x")
+	if e := output.ToError(err); err == nil || e.Code != output.CodeMissingArgument {
+		t.Fatalf("positional value + --file: err=%v", err)
+	}
+
+	_, err = runMuxcat(t, "redis", "set", "k")
+	if e := output.ToError(err); err == nil || e.Code != output.CodeMissingArgument {
+		t.Fatalf("no value at all: err=%v", err)
+	}
+
+	_, err = runMuxcat(t, "redis", "set", "k", "--file", filepath.Join(t.TempDir(), "nope"))
+	if e := output.ToError(err); err == nil || e.Code != output.CodeMissingArgument {
+		t.Fatalf("unreadable file: err=%v", err)
+	}
+
+	f := filepath.Join(t.TempDir(), "v.bin")
+	if err := os.WriteFile(f, []byte{'a', 0, 1, 'b'}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = runMuxcat(t, "redis", "set", "k", "--file", f)
+	if e := output.ToError(err); err == nil || e.Code != output.CodeConnectFailed {
+		t.Fatalf("readable file should reach the dial stage: err=%v", err)
 	}
 }
 

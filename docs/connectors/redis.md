@@ -47,7 +47,7 @@ Redis connector 接入 Redis standalone 实例（Redis 6+，含 Redis 8），驱
 |---|---|---|
 | `redis exec <cmd> [args...]` | `--binary hex\|base64`（默认 hex）、`--max-bytes N`（默认 4096） | `{type, value}`，type ∈ string/integer/array/map/null |
 | `redis get <key>` | `--binary`、`--max-bytes` | `{value}`，key 不存在 → `value: null` |
-| `redis set <key> <value>` | `--ttl <duration>`（如 30s）、`--nx`、`--xx` | `{value}`，OK / null（nx/xx 条件不满足） |
+| `redis set <key> [value]` | `--ttl <duration>`（如 30s）、`--nx`、`--xx`、`--file <path>`（从文件读值，与位置参数互斥；二进制安全；`-` 读 stdin） | `{value}`，OK / null（nx/xx 条件不满足） |
 | `redis del <key> [key...]` | — | `{deleted: N}` |
 | `redis keys [pattern]` | `--limit N`（默认 1000，0 不截断） | columns/rows 单列 `key`；SCAN 实现，绝不使用 KEYS |
 | `redis type <key>` | — | `{value}`，不存在 → "none" |
