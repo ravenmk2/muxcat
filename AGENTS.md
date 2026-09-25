@@ -35,7 +35,7 @@ muxcat/
 |---|---|
 | 工程骨架 + SQLite | ✅ |
 | 自更新 upgrade | ✅ |
-| MySQL | 📋 |
+| MySQL | ✅ |
 | Postgres | 📋 |
 | Redis | ✅ |
 | etcd | 📋 |

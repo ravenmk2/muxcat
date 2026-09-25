@@ -43,14 +43,14 @@ SQLite 是 muxcat 的首个 connector，也是后续 connector 设计文档的�
   "columns": [{ "name": "id", "type": "INTEGER" }],
   "rows": [[1, "a"]],
   "row_count": 1,
-  "rows_affected": null
+  "rows_affected": 0
 }
 ```
 
 - 语句按首关键词分流：`SELECT/PRAGMA/WITH/EXPLAIN/VALUES/TABLE` 走查询路径返回结果集；其余走 Exec 路径返回 `rows_affected`（columns/rows 为空）。注意 `INSERT ... RETURNING` 会被分入 Exec 路径（已知限制）。
 - 结果行数超过 `--limit`（默认 1000）时截断并置 `meta.truncated: true`（多读一行判断）；`--limit 0` 表示不截断。
 - envelope 的 `meta.connector` 恒为 `sqlite`，`meta.connection` 为实际连接名。
-- BLOB 列按字符串输出。
+- 值呈现与 mysql connector 一致（见 docs/connectors/mysql.md "值呈现规则"），由 sqlite connector 自行声明的同款 `CellStyle` 实现（独立实例，可分别演化）：`NULL` 渲染为 `NULL`（与空字符串可区分）；BLOB 列保留原始字节，文本模式渲染为 `0x` 大写 hex，`--json` 输出 `0x` hex 字符串。
 
 ## readonly 实现
 
@@ -69,4 +69,3 @@ readonly 连接在 DSN 上附加 `mode=ro`，由 SQLite 自身拒绝写操作；
 - 查询/Exec 分流靠首关键词启发式，`INSERT ... RETURNING`、CTE 写语句等不走结果集路径。
 - DSN 中路径未做 URL 转义，含 `?`、`#` 等特殊字符的文件名不受支持。
 - 单连接串行执行；未暴露事务与多语句脚本接口。
-- BLOB 列以字符串渲染，不可读字节会原样输出。

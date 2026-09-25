@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ravenmk2/muxcat/schema/mysql.schema.json",
+  "title": "mysql connector config (mysql.json)",
+  "allOf": [
+    { "$ref": "connector-common.schema.json#/$defs/connectorDoc" }
+  ],
+  "properties": {
+    "instances": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/mysqlInstance" }
+    },
+    "connections": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/mysqlConnection" }
+    }
+  },
+  "$defs": {
+    "mysqlInstance": {
+      "type": "object",
+      "required": ["host"],
+      "properties": {
+        "host": { "type": "string", "minLength": 1 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "tls": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "mysqlConnection": {
+      "type": "object",
+      "required": ["instance"],
+      "properties": {
+        "instance": { "type": "string", "minLength": 1 },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "database": { "type": "string" },
+        "readonly": { "type": "boolean" },
+        "timeout": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,12 +1,17 @@
-package sqlite
+package mysql
 
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"io"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	gomysql "github.com/go-sql-driver/mysql"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 
 	"github.com/ravenmk2/muxcat/internal/cli"
@@ -17,16 +22,18 @@ import (
 // path (returning a result set); everything else goes to the Exec path and
 // reports rows_affected.
 var queryVerbs = map[string]bool{
-	"SELECT": true, "PRAGMA": true, "WITH": true,
-	"EXPLAIN": true, "VALUES": true, "TABLE": true,
+	"SELECT": true, "SHOW": true, "DESC": true, "DESCRIBE": true,
+	"EXPLAIN": true, "WITH": true, "VALUES": true, "TABLE": true,
 }
 
 func isQuery(sqlText string) bool {
-	fields := strings.Fields(strings.TrimSpace(sqlText))
-	if len(fields) == 0 {
-		return false
-	}
-	return queryVerbs[strings.ToUpper(fields[0])]
+	return queryVerbs[firstKeyword(sqlText)]
+}
+
+// stdinIsTTY reports whether stdin is a terminal; a variable so tests can
+// stub it.
+var stdinIsTTY = func() bool {
+	return isatty.IsTerminal(os.Stdin.Fd())
 }
 
 // resolveTarget loads the config and resolves a connection from
@@ -49,15 +56,63 @@ type columnInfo struct {
 	Type string `json:"type"`
 }
 
+// resolveSQLInput resolves the SQL text: positional argument > --file
+// <path> > --file - (stdin) > implicit stdin when it is not a TTY.
+func resolveSQLInput(cmd *cobra.Command, args []string) (string, error) {
+	file := cli.FlagString(cmd, "file")
+	if len(args) == 1 && file != "" {
+		return "", output.NewError(output.CodeMissingArgument,
+			"SQL given both as an argument and via --file",
+			"choose one: muxcat mysql query \"SQL\" or muxcat mysql query --file <path>")
+	}
+	if len(args) == 1 {
+		return args[0], nil
+	}
+	if file != "" {
+		if file == "-" {
+			return readStdin(cmd)
+		}
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return "", output.NewError(output.CodeMissingArgument,
+				"cannot read --file "+file+": "+err.Error(), "")
+		}
+		return string(data), nil
+	}
+	if stdinIsTTY() {
+		return "", output.NewError(output.CodeMissingArgument,
+			"no SQL provided",
+			"usage: muxcat mysql query \"SQL\", muxcat mysql query --file <path>, or echo \"SQL\" | muxcat mysql query")
+	}
+	return readStdin(cmd)
+}
+
+func readStdin(cmd *cobra.Command) (string, error) {
+	data, err := io.ReadAll(cmd.InOrStdin())
+	if err != nil {
+		return "", output.NewError(output.CodeMissingArgument,
+			"cannot read SQL from stdin: "+err.Error(), "")
+	}
+	return string(data), nil
+}
+
 func newQueryCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   `query "SQL"`,
+	c := &cobra.Command{
+		Use:   `query ["SQL"]`,
 		Short: "Execute SQL (SELECT-like statements return a result set, others report rows_affected)",
-		Args:  cli.ExactArgs(1, `"SQL"`, "sql"),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
 			if err != nil {
+				return err
+			}
+			sqlText, err := resolveSQLInput(cmd, args)
+			if err != nil {
+				return err
+			}
+			// The readonly guard intercepts writes before any dialing.
+			if err := guardQuery(conn, sqlText); err != nil {
 				return err
 			}
 			timeout, err := queryTimeout(conn, cli.FlagTimeout(cmd))
@@ -66,18 +121,21 @@ func newQueryCmd() *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
-			db, _, err := openDB(ctx, cfg, conn)
+			db, err := openDB(ctx, cfg, conn, cli.FlagString(cmd, "db"))
 			if err != nil {
 				return err
 			}
 			defer func() { _ = db.Close() }()
 
-			if isQuery(args[0]) {
-				return runRows(cmd, ctx, db, name, args[0], start)
+			if isQuery(sqlText) {
+				return runRows(cmd, ctx, db, name, sqlText, start)
 			}
-			return runExec(cmd, ctx, db, name, args[0], start)
+			return runExec(cmd, ctx, db, name, sqlText, start)
 		},
 	}
+	c.Flags().String("db", "", "override the connection's database for this invocation")
+	c.Flags().String("file", "", "read SQL from a file (- reads from stdin)")
+	return c
 }
 
 // runRows executes a query statement, truncating at --limit and setting
@@ -117,8 +175,8 @@ func runRows(cmd *cobra.Command, ctx context.Context, db *sql.DB, connName, sqlT
 		if err := rs.Scan(ptrs...); err != nil {
 			return classifyErr(err, "failed to read results")
 		}
-		// Type-aware []byte handling: BLOB columns keep their raw bytes
-		// (text renderers hex them; JSON gets the hex form below),
+		// Type-aware []byte handling: binary-typed columns keep their raw
+		// bytes (text renderers hex them; JSON gets the hex form below),
 		// everything else converts to string.
 		for i, v := range vals {
 			if b, ok := v.([]byte); ok && !output.IsBinaryType(cols[i].Type) {
@@ -156,8 +214,8 @@ func dbTypes(cols []columnInfo) []string {
 }
 
 // runExec executes a non-query statement and reports rows_affected. Writes
-// on readonly connections are rejected by SQLite via mode=ro, and the
-// error is classified as READONLY_VIOLATION.
+// on readonly connections are rejected by the client-side guard before
+// dialing, and by the server-side read-only session as a fallback.
 func runExec(cmd *cobra.Command, ctx context.Context, db *sql.DB, connName, sqlText string, start time.Time) error {
 	res, err := db.ExecContext(ctx, sqlText)
 	if err != nil {
@@ -177,7 +235,7 @@ func runExec(cmd *cobra.Command, ctx context.Context, db *sql.DB, connName, sqlT
 }
 
 func newTablesCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:   "tables",
 		Short: "List tables and views in the database",
 		Args:  cobra.NoArgs,
@@ -187,18 +245,21 @@ func newTablesCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ctx, cancel := context.WithTimeout(cmd.Context(), cli.FlagTimeout(cmd))
+			timeout, err := queryTimeout(conn, cli.FlagTimeout(cmd))
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
-			db, _, err := openDB(ctx, cfg, conn)
+			db, err := openDB(ctx, cfg, conn, cli.FlagString(cmd, "db"))
 			if err != nil {
 				return err
 			}
 			defer func() { _ = db.Close() }()
 
 			rs, err := db.QueryContext(ctx,
-				`SELECT name, type FROM sqlite_master
-				 WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%'
-				 ORDER BY type, name`)
+				`SELECT TABLE_NAME, TABLE_TYPE FROM information_schema.TABLES
+				 WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_TYPE, TABLE_NAME`)
 			if err != nil {
 				return classifyErr(err, "query failed")
 			}
@@ -220,12 +281,14 @@ func newTablesCmd() *cobra.Command {
 			}, meta(name, start, false))
 		},
 	}
+	c.Flags().String("db", "", "override the connection's database for this invocation")
+	return c
 }
 
 func newSchemaCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:   "schema [table]",
-		Short: "Print DDL: the whole database without arguments, a single table otherwise",
+		Short: "Print DDL: all tables without arguments, a single table otherwise",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
@@ -233,49 +296,88 @@ func newSchemaCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ctx, cancel := context.WithTimeout(cmd.Context(), cli.FlagTimeout(cmd))
+			timeout, err := queryTimeout(conn, cli.FlagTimeout(cmd))
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
-			db, _, err := openDB(ctx, cfg, conn)
+			db, err := openDB(ctx, cfg, conn, cli.FlagString(cmd, "db"))
 			if err != nil {
 				return err
 			}
 			defer func() { _ = db.Close() }()
 
-			query := `SELECT sql FROM sqlite_master WHERE sql IS NOT NULL`
-			params := []any{}
 			if len(args) == 1 {
-				query += ` AND name = ?`
-				params = append(params, args[0])
+				ddl, err := showCreateTable(ctx, db, args[0])
+				if err != nil {
+					var myErr *gomysql.MySQLError
+					if errors.As(err, &myErr) && myErr.Number == 1146 {
+						return output.NewError(output.CodeQueryError,
+							"table not found: "+args[0], "list tables with muxcat mysql tables")
+					}
+					return classifyErr(err, "query failed")
+				}
+				return renderDDL(cmd, name, ddl, start)
 			}
-			query += ` ORDER BY rowid`
-			rs, err := db.QueryContext(ctx, query, params...)
+
+			rs, err := db.QueryContext(ctx,
+				`SELECT TABLE_NAME FROM information_schema.TABLES
+				 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME`)
 			if err != nil {
 				return classifyErr(err, "query failed")
 			}
-			defer func() { _ = rs.Close() }()
-			var ddls []string
+			tables := make([]string, 0)
 			for rs.Next() {
-				var ddl string
-				if err := rs.Scan(&ddl); err != nil {
+				var tbl string
+				if err := rs.Scan(&tbl); err != nil {
+					_ = rs.Close()
 					return classifyErr(err, "failed to read results")
 				}
-				ddls = append(ddls, ddl)
+				tables = append(tables, tbl)
 			}
+			_ = rs.Close()
 			if err := rs.Err(); err != nil {
 				return classifyErr(err, "failed to read results")
 			}
-			if len(args) == 1 && len(ddls) == 0 {
-				return output.NewError(output.CodeQueryError,
-					"table or view not found: "+args[0], "list objects with muxcat sqlite tables")
+
+			ddls := make([]string, 0, len(tables))
+			for _, tbl := range tables {
+				ddl, err := showCreateTable(ctx, db, tbl)
+				if err != nil {
+					return classifyErr(err, "query failed")
+				}
+				ddls = append(ddls, ddl)
 			}
-			ddl := strings.Join(ddls, ";\n\n")
-			if ddl != "" {
-				ddl += ";"
-			}
-			return cli.RenderResult(cmd, &output.Result{
-				Value:    ddl,
-				JSONData: map[string]any{"ddl": ddl},
-			}, meta(name, start, false))
+			return renderDDL(cmd, name, strings.Join(ddls, ";\n\n"), start)
 		},
 	}
+	c.Flags().String("db", "", "override the connection's database for this invocation")
+	return c
+}
+
+// showCreateTable returns the CREATE TABLE DDL of one table.
+func showCreateTable(ctx context.Context, db *sql.DB, table string) (string, error) {
+	var tbl, ddl string
+	err := db.QueryRowContext(ctx, "SHOW CREATE TABLE "+quoteIdent(table)).Scan(&tbl, &ddl)
+	if err != nil {
+		return "", err
+	}
+	return ddl, nil
+}
+
+// quoteIdent quotes a MySQL identifier with backticks.
+func quoteIdent(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
+func renderDDL(cmd *cobra.Command, connName, ddl string, start time.Time) error {
+	if ddl != "" {
+		ddl += ";"
+	}
+	return cli.RenderResult(cmd, &output.Result{
+		Value:    ddl,
+		JSONData: map[string]any{"ddl": ddl},
+		Syntax:   "sql",
+	}, meta(connName, start, false))
 }

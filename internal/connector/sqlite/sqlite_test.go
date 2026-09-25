@@ -299,3 +299,44 @@ func TestTablesAndSchema(t *testing.T) {
 		t.Fatalf("conn test: err=%v out=%q", err, out)
 	}
 }
+
+// TestNullAndBlobRendering locks the type-aware cell presentation: NULL
+// renders as NULL (distinct from the empty string), BLOB columns render as
+// uppercase 0x hex, and --json keeps null/""/hex-string distinctions.
+func TestNullAndBlobRendering(t *testing.T) {
+	dbPath := setupEnv(t)
+	addConn(t, "local", dbPath, "--set-default")
+	queryOK(t, "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, data BLOB)")
+	queryOK(t, "INSERT INTO t(name, data) VALUES(NULL, X'DEADBEEF')")
+	queryOK(t, "INSERT INTO t(name, data) VALUES('', X'00FF')")
+
+	out := queryOK(t, "SELECT id, name, data FROM t ORDER BY id")
+	if !strings.Contains(out, "NULL") {
+		t.Fatalf("NULL should render as NULL: %q", out)
+	}
+	if !strings.Contains(out, "0xDEADBEEF") || !strings.Contains(out, "0x00FF") {
+		t.Fatalf("BLOB should render as 0x hex: %q", out)
+	}
+
+	out = queryOK(t, "SELECT id, name, data FROM t ORDER BY id", "--json")
+	var env struct {
+		Data struct {
+			Rows [][]any `json:"rows"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("invalid envelope: %v\n%s", err, out)
+	}
+	if len(env.Data.Rows) != 2 {
+		t.Fatalf("rows = %v", env.Data.Rows)
+	}
+	if env.Data.Rows[0][1] != nil {
+		t.Fatalf("NULL must stay null in JSON, got %v", env.Data.Rows[0][1])
+	}
+	if env.Data.Rows[0][2] != "0xDEADBEEF" || env.Data.Rows[1][2] != "0x00FF" {
+		t.Fatalf("JSON BLOB cells should be hex strings: %v", env.Data.Rows)
+	}
+	if env.Data.Rows[1][1] != "" {
+		t.Fatalf("empty string must stay \"\" in JSON, got %v", env.Data.Rows[1][1])
+	}
+}

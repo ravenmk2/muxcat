@@ -26,9 +26,10 @@ muxcat 是一个面向基础设施后端的统一命令行客户端：以内置 
 
 - Envelope 固定形状：
   `{ok, data, meta:{connector, connection, elapsed_ms, truncated}, error:{code, message, hint?}}`。
-  顶层字段恒定——`data`/`error` 缺省时输出 `null` 而非省略；`hint` 可选；query 类命令的 data 为 `columns`（带 type）+ `rows` 二维数组 + `row_count` + `rows_affected`（查询路径为 `null`，DML 路径为影响行数）。
+  顶层字段恒定——`data`/`error` 缺省时输出 `null` 而非省略；`hint` 可选；query 类命令的 data 为 `columns`（带 type）+ `rows` 二维数组 + `row_count` + `rows_affected`（查询路径为 `0`，DML 路径为影响行数）。
 - 输出模式：`--output auto|table|plain|tsv|json`，`--json` 为快捷方式且优先于一切；解析优先级 flag > `props.defaults.output` > auto；auto 时 TTY→table、非 TTY→plain。
 - 裸值渲染：`Result.Value` 为单键 map 且标记 `Bare` 时，文本模式（plain/tsv/table）只输出值本身、不带 `key:` 标签（如 `redis get` 直接输出值），nil 值输出空行；JSON envelope 不受影响。
+- 单元格格式化：文本模式（table/plain/tsv）经 `Result.CellStyle` 格式化单元格——这是 connector 的可选声明（opt-in）；未声明（nil）时为 legacy 默认：nil → 空串、`[]byte` → string、其余 `fmt.Sprint`、无类别着色。声明后按配置渲染：`NullText`（如 `NULL`）、`BinaryHex`（二进制类型列的 `[]byte` → `0x` 大写 hex，类型取自 `Result.ColumnTypes` 的 `DatabaseTypeName()`）、`DateLayout`/`TimeLayout`（`time.Time` 布局）、`Palette`（按类别着色）。table 模式总宽超过终端宽度时从最宽列压缩单元格（`…` 尾缀，列下限保护），plain/tsv/json 不截断。
 - 降级：stdin/stdout 任一为管道视为非 TTY，auto 降级 plain 且**全局禁止交互**（缺必填参数直接报 `MISSING_ARGUMENT`，绝不等待输入）。
 - 颜色：`props.defaults.color`（auto|always|never）+ `--no-color` + `NO_COLOR` 环境变量共同决定；非 TTY 强制无色。真彩色靠 lipgloss/termenv 自动检测，不加独立配置。颜色开启时，文本模式下 `Result.Syntax` 指定的 chroma lexer 会对输出做语法高亮（如 redis get 的 JSON 值）。
 
@@ -68,8 +69,9 @@ muxcat/
 │   ├── upgrade/           # 自更新：GitHub release 查询、带重试下载、checksum 校验、自替换（见 docs/upgrade.md）
 │   └── connector/
 │       ├── registry.go    # connector 注册表
-│       ├── sqlite/        # SQLite connector（见 docs/connectors/sqlite.md）
-│       └── redis/         # Redis connector（见 docs/connectors/redis.md）
+│       ├── mysql/         # MySQL connector（见 docs/connectors/mysql.md）
+│       ├── redis/         # Redis connector（见 docs/connectors/redis.md）
+│       └── sqlite/        # SQLite connector（见 docs/connectors/sqlite.md）
 ├── schema/                # JSON Schema（go:embed）+ 校验实现
 ├── docs/                  # 设计文档
 └── scripts/build.sh       # 本地多平台构建（--install 到 ~/.local/bin）

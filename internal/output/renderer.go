@@ -6,25 +6,34 @@ import (
 	"io"
 	"sort"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Result is what a command hands to a Renderer.
 // The tabular carrier (Columns+Rows) is used by table/plain/tsv rendering;
 // for JSON mode the envelope data prefers JSONData (e.g. query's rich
 // shape), then normalized Columns+Rows, then Value, then Message.
+// ColumnTypes optionally carries the columns' DatabaseTypeName() values,
+// parallel to Columns; it feeds type-aware formatting (binary detection,
+// DATE layout) when a CellStyle is attached.
+// CellStyle is the connector's opt-in cell presentation; nil means the
+// legacy default formatting (nil -> "", []byte -> string, no coloring).
 // Bare asks text renderers to print a single-entry Value map as the bare
 // value without its label (e.g. redis get prints the value, not "value: x").
 // Syntax names a chroma lexer (json, yaml, toml, ...) for syntax
 // highlighting in text modes; it only takes effect when color is on.
 // Neither Bare nor Syntax affects JSON rendering.
 type Result struct {
-	Columns  []string
-	Rows     [][]any
-	JSONData any
-	Value    any
-	Message  string
-	Bare     bool
-	Syntax   string
+	Columns     []string
+	ColumnTypes []string
+	Rows        [][]any
+	JSONData    any
+	Value       any
+	Message     string
+	Bare        bool
+	Syntax      string
+	CellStyle   *CellStyle
 }
 
 // Payload returns the normalized payload of the Result, used by JSON
@@ -68,14 +77,23 @@ func NewRenderer(mode Mode, color bool) Renderer {
 	}
 }
 
+// columnType returns the db type name of column j, "" when untyped.
+func (r *Result) columnType(j int) string {
+	if j < len(r.ColumnTypes) {
+		return r.ColumnTypes[j]
+	}
+	return ""
+}
+
+// formatCell formats a tabular cell via the attached CellStyle, or the
+// legacy default when none is attached (nil receiver).
+func (r *Result) formatCell(v any, j int, color bool) string {
+	return r.CellStyle.FormatCell(v, r.columnType(j), color)
+}
+
+// cellString formats an untyped non-tabular value (legacy default).
 func cellString(v any) string {
-	if v == nil {
-		return ""
-	}
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return fmt.Sprint(v)
+	return legacyCell(v)
 }
 
 // renderFallback handles non-tabular carriers (Value/Message); shared by
@@ -134,7 +152,8 @@ func (jsonRenderer) Render(w io.Writer, r *Result) error {
 	return err
 }
 
-// tsvRenderer renders tab-separated text with a header row.
+// tsvRenderer renders tab-separated text with a header row. Cells are
+// formatted type-aware but never colored.
 type tsvRenderer struct {
 	color bool
 }
@@ -149,7 +168,7 @@ func (t tsvRenderer) Render(w io.Writer, r *Result) error {
 	for _, row := range r.Rows {
 		cells := make([]string, len(row))
 		for i, v := range row {
-			cells[i] = cellString(v)
+			cells[i] = r.formatCell(v, i, false)
 		}
 		if _, err := fmt.Fprintln(w, strings.Join(cells, "\t")); err != nil {
 			return err
@@ -159,6 +178,7 @@ func (t tsvRenderer) Render(w io.Writer, r *Result) error {
 }
 
 // plainRenderer renders unadorned aligned text (the non-TTY degraded form).
+// Widths are measured ANSI-aware (lipgloss.Width) so colored cells align.
 type plainRenderer struct {
 	color bool
 }
@@ -167,24 +187,31 @@ func (p plainRenderer) Render(w io.Writer, r *Result) error {
 	if r.Columns == nil {
 		return renderFallback(w, r, p.color)
 	}
+	rows := make([][]string, len(r.Rows))
+	for i, row := range r.Rows {
+		cells := make([]string, len(row))
+		for j, v := range row {
+			cells[j] = r.formatCell(v, j, p.color)
+		}
+		rows[i] = cells
+	}
 	widths := make([]int, len(r.Columns))
 	for i, c := range r.Columns {
-		widths[i] = len(c)
+		widths[i] = lipgloss.Width(c)
 	}
-	for _, row := range r.Rows {
-		for i, v := range row {
-			if i < len(widths) && len(cellString(v)) > widths[i] {
-				widths[i] = len(cellString(v))
+	for _, row := range rows {
+		for i, cell := range row {
+			if i < len(widths) && lipgloss.Width(cell) > widths[i] {
+				widths[i] = lipgloss.Width(cell)
 			}
 		}
 	}
 	writeRow := func(cells []string) error {
 		parts := make([]string, len(cells))
 		for i, c := range cells {
-			if i < len(cells)-1 {
-				parts[i] = fmt.Sprintf("%-*s", widths[i], c)
-			} else {
-				parts[i] = c
+			parts[i] = c
+			if i < len(cells)-1 && i < len(widths) {
+				parts[i] += strings.Repeat(" ", widths[i]-lipgloss.Width(c))
 			}
 		}
 		_, err := fmt.Fprintln(w, strings.TrimRight(strings.Join(parts, "  "), " "))
@@ -193,12 +220,8 @@ func (p plainRenderer) Render(w io.Writer, r *Result) error {
 	if err := writeRow(r.Columns); err != nil {
 		return err
 	}
-	for _, row := range r.Rows {
-		cells := make([]string, len(row))
-		for i, v := range row {
-			cells[i] = cellString(v)
-		}
-		if err := writeRow(cells); err != nil {
+	for _, row := range rows {
+		if err := writeRow(row); err != nil {
 			return err
 		}
 	}
