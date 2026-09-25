@@ -27,6 +27,17 @@ muxcat/
 - docs/upgrade.md：自更新设计——upgrade 命令、下载重试、平台自替换
 - docs/connectors/：每个 connector 一份独立设计文档
 
+## 安全规范
+
+**所有功能禁止明文输出密码、密钥等凭据。** 任何输出通道（table/plain/tsv/json、stderr、错误消息、hint、日志）都不得回显明文凭据。具体要求：
+
+- 凭据落盘仅允许 `enc:v1:` blob；解密后的明文只存在于内存，不得写入任何输出
+- `conn ls` / `conn show` 等命令不回显密码字段
+- `--password` 等明文 flag 仅作输入入口：打 stderr 警告后加密存储，不回显
+- 连接串/DSN 内含解密后凭据，不得出现在错误消息或日志中
+- 可能携带凭据的服务端配置/元信息（如 redis `CONFIG GET` 的 requirepass/masterauth）必须脱敏为 `***`；空值保持空，保留"是否已设置"的可判断性
+- 新增 connector 或命令时，自查所有输出路径是否满足本条；测试应包含凭据不泄露的断言
+
 ## 路线图
 
 ✅ 已完成　📋 计划中（不分先后）
