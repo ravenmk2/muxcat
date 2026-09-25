@@ -40,8 +40,18 @@ MySQL connector（MySQL 5.7+ / 8.x），基于纯 Go 驱动 `github.com/go-sql-d
 | `mysql conn default <name>` | 设为默认连接 |
 | `mysql conn test <name>` | PING + `SELECT VERSION()`，返回 `{ok, latency_ms, version}` |
 | `mysql query ["SQL"] [--db 库] [--file 路径] [--limit N]` | 执行 SQL |
+| `mysql execute ["SQL"] [--db 库] [--file 路径]` | 显式执行：任意语句无条件走 Exec，只报 `rows_affected`（结果集丢弃）；readonly 连接一律拒绝 |
 | `mysql tables [--db 库]` | 列出当前库的表与视图（`information_schema.TABLES`） |
 | `mysql schema [--db 库] [table]` | 无参输出所有 BASE TABLE 的 DDL，有参输出单表 DDL（`SHOW CREATE TABLE`）；表不存在报 `QUERY_ERROR` |
+| `mysql databases` | 列出实例上的数据库 |
+| `mysql status [--all]` | 精选状态指标（含派生 qps / InnoDB 命中率）；`--all` 全量 `SHOW GLOBAL STATUS` |
+| `mysql variables [pattern] [--session]` | 服务器变量；pattern 为大小写不敏感子串过滤（非 LIKE 通配） |
+| `mysql processlist` | `SHOW FULL PROCESSLIST`（恒 FULL） |
+| `mysql kill <id> [--yes]` | 终止指定连接；readonly 连接拒绝；非 TTY 必须 `--yes` |
+| `mysql users` | 列出 `mysql.user` 账号（需要其 SELECT 权限） |
+| `mysql grants [user@host]` | 查看授权；无参为当前账号 |
+| `mysql engine innodb status` | InnoDB monitor 报告全文 |
+| `mysql replication` | 复制状态精选字段（8.0 命名，5.7 自动回退映射） |
 
 ### query 的 SQL 输入来源
 
@@ -90,6 +100,68 @@ MySQL connector（MySQL 5.7+ / 8.x），基于纯 Go 驱动 `github.com/go-sql-d
 - 二进制恒为 hex（不提供开关）：官方 cli 默认直出原始字节对管道不友好，hex 是其 `--binary-as-hex` 推荐语义；同时修复了非 UTF-8 二进制在 JSON 中变 `\ufffd` 的损坏问题。
 - 彩色着色作用于 table 与 plain 两种文本模式（颜色开启时：TTY auto，或显式 `--output` 强制）；tsv/json 永不着色，面向管道与机器处理。
 - table 模式在表格总宽超过终端宽度时从最宽列开始压缩单元格（ANSI 感知截断 + `…` 尾缀，列下限不小于列名宽度与 8）；纯展示层行为，不改数据，`meta.truncated` 仍只表示 `--limit` 行截断。plain/tsv/json 一律不截断。
+
+## execute 与 query 的分工
+
+- `query` 取数优先：按首关键词自动分流，SELECT 类返回结果集，其余报 `rows_affected`——自动分流是便利。
+- `execute` 显式执行：任意语句（含 SELECT）无条件走 `ExecContext`，只报 `rows_affected`，结果集丢弃。输入通道与 query 完全一致（位置参数 / `--file` / `--file -` / stdin 管道，互斥校验相同），支持 `--db` 临时换库。
+- readonly 行为不同：query 过首关键字白名单守卫（只拦写）；execute 一律拒绝（含 SELECT），错误同为 `READONLY_VIOLATION` 且拨号前发生。
+- execute 同样不启用多语句（`MultiStatements=false`）。
+
+## 运维命令
+
+面向实例级元信息的九个命令，通用约定：
+
+- 均**不支持 `--db`**（与当前库无关，保持 flag 面干净）。
+- 除 `kill` 外全部是只读命令，readonly 连接放行（不经过 query 的 SQL 文本守卫）。
+- 权限不足（1142 / 1227）归类 `QUERY_ERROR`，hint 说明所需权限。
+
+### databases
+
+`SHOW DATABASES`，单列 `database` 按名排序；JSON `{"databases": [...]}`。
+
+### status [--all]
+
+- 默认精选：一次 `SHOW GLOBAL STATUS` + 一次 `SHOW GLOBAL VARIABLES`（补 `version`/`max_connections`），两列 `name | value` 固定顺序输出：
+  `version, uptime_s, qps, threads_connected, threads_running, max_connections, connections, aborted_connects, questions, slow_queries, com_select, com_insert, com_update, com_delete, innodb_buffer_pool_reads, innodb_buffer_pool_read_requests, innodb_buffer_pool_hit_rate`。
+  派生指标：`qps = Queries/Uptime`（保留 1 位小数）；`innodb_buffer_pool_hit_rate = 1 - reads/read_requests`（百分比 1 位小数，无 InnoDB 计数器时整组省略；read_requests 为 0 时按 100%）。
+- `--all`：`SHOW GLOBAL STATUS` 全量两列原样（按名排序）。
+- JSON：精选 `{"metrics": {name: value}}`（数值尽量为 number），`--all` 为 `{"status": {name: value}}`。
+
+### variables [pattern] [--session]
+
+默认 `SHOW GLOBAL VARIABLES`，`--session` 改查会话变量；pattern 为**客户端**大小写不敏感子串过滤（不是 LIKE 通配）。两列 `name | value`；JSON `{"variables": {name: value}}`。
+
+### processlist
+
+`SHOW FULL PROCESSLIST`（恒 FULL，无开关），列 `id | user | host | db | command | time | state | info`，服务端原始顺序；NULL 的 db/state/info 经 CellStyle 显示 `NULL`，空 info 显示为空。JSON `{"processes": [{id,user,host,db,command,time,state,info}]}`（保留 null）。只看得到自己会话以外的连接需要 `PROCESS` 权限。
+
+### kill \<id> [--yes]
+
+- id 校验：纯数字且 > 0，否则 `MISSING_ARGUMENT`。
+- readonly 连接拨号前拒绝：`READONLY_VIOLATION`。
+- 确认：TTY 先查 processlist 展示目标摘要（id/user/host/info，id 不存在报 `QUERY_ERROR` "no such process id"）再弹 huh 确认；非 TTY 必须 `--yes`。
+- 执行 `KILL <id>`（id 已校验为整数，直接拼接）；成功输出 `killed connection <id>`。终止他人连接需要 `CONNECTION_ADMIN` 权限。
+
+### users
+
+`SELECT user, host, plugin, account_locked, password_expired FROM mysql.user ORDER BY user, host`，列 `user | host | plugin | locked | expired`；1142 时 hint 提示需要 `mysql.user` 的 SELECT 权限。
+
+### grants [user@host]
+
+- 无参：`SHOW GRANTS`（当前账号）；有参：`SHOW GRANTS FOR 'u'@'h'`——按第一个 `@` 拆分，两段各自转义单引号/反斜线后放入单引号（防注入）。
+- 单列 `grants`；JSON `{"grants": [...]}`。
+
+### engine innodb status
+
+嵌套命令组 `engine → innodb → status`。`SHOW ENGINE INNODB STATUS` 的 Status 列全文原样输出（裸文本，不做语法高亮）；JSON `{"status": "<text>"}`。不支持 InnoDB 的实例由驱动报错走 classifyErr。
+
+### replication
+
+- `SHOW REPLICA STATUS`；语法不支持（1064，如 MySQL 5.7 / 老 MariaDB）自动回退 `SHOW SLAVE STATUS`。
+- 空结果（非复制实例）→ `Message: "not a replica"` + JSON `{"replica": null}`（ok:true）。
+- 有结果：精选字段 `source_host, source_port, source_user, replica_io_running, replica_sql_running, seconds_behind_source, retrieved_gtid_set, executed_gtid_set, last_error`；输出名按 8.0 命名，5.7 的 `Master_*`/`Slave_*` 自动映射；GTID 集合在文本显示中截断（JSON 保留全量）；多源复制只取第一行。
+- 复制通道的完整排障信息需要相应权限（如 `REPLICATION CLIENT`）。
 
 ## readonly 双保险
 

@@ -138,6 +138,50 @@ func newQueryCmd() *cobra.Command {
 	return c
 }
 
+// newExecuteCmd builds the explicit execution entry: every statement goes
+// through Exec unconditionally (result sets are discarded), complementing
+// query's first-keyword auto-routing. It is stricter than query on
+// readonly connections: everything is rejected, even SELECT.
+func newExecuteCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   `execute ["SQL"]`,
+		Short: "Execute a statement unconditionally via Exec (result sets are discarded)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			start := time.Now()
+			cfg, name, conn, err := resolveTarget(cmd)
+			if err != nil {
+				return err
+			}
+			sqlText, err := resolveSQLInput(cmd, args)
+			if err != nil {
+				return err
+			}
+			if conn.Readonly {
+				return output.NewError(output.CodeReadonlyViolation,
+					"execute is not allowed on a readonly connection",
+					"use query for read-only statements, or use a writable connection (-c)")
+			}
+			timeout, err := queryTimeout(conn, cli.FlagTimeout(cmd))
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+			defer cancel()
+			db, err := openDB(ctx, cfg, conn, cli.FlagString(cmd, "db"))
+			if err != nil {
+				return err
+			}
+			defer func() { _ = db.Close() }()
+
+			return runExec(cmd, ctx, db, name, sqlText, start)
+		},
+	}
+	c.Flags().String("db", "", "override the connection's database for this invocation")
+	c.Flags().String("file", "", "read SQL from a file (- reads from stdin)")
+	return c
+}
+
 // runRows executes a query statement, truncating at --limit and setting
 // meta.truncated.
 func runRows(cmd *cobra.Command, ctx context.Context, db *sql.DB, connName, sqlText string, start time.Time) error {

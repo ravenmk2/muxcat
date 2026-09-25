@@ -39,7 +39,22 @@ func New() *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	c.AddCommand(newConnCmd(), newQueryCmd(), newTablesCmd(), newSchemaCmd())
+	c.AddCommand(
+		newConnCmd(),
+		newQueryCmd(),
+		newExecuteCmd(),
+		newTablesCmd(),
+		newSchemaCmd(),
+		newDatabasesCmd(),
+		newStatusCmd(),
+		newVariablesCmd(),
+		newProcesslistCmd(),
+		newKillCmd(),
+		newUsersCmd(),
+		newGrantsCmd(),
+		newEngineCmd(),
+		newReplicationCmd(),
+	)
 	return c
 }
 
