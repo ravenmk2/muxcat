@@ -56,6 +56,18 @@ muxcat 是一个面向基础设施后端的统一命令行客户端：以内置 
 - 版本注入：`-ldflags "-s -w -X main.version=<ver>"`，代码中 `var version = "dev"` 兜底；release 由 goreleaser 按 tag 构建。
 - SQLite 双驱动：`modernc.org/sqlite`（纯 Go，`!cgo`）与 `mattn/go-sqlite3`（`cgo`）由 build constraint 自动切换；DSN 只用 `_pragma=` 公共交集。
 
+## 帮助信息约定
+
+目标：AI Agent（与人）无需额外文档，仅凭各级 `--help` 即可学会用法。分层约定：
+
+- **root Long**：产品定位、三步上手（conn add → 数据命令 → `-c` 切换）、全局契约指引、安全承诺一句话。
+- **全局契约**用 cobra additional help topic 承载（`internal/cli/topics.go`）：`muxcat help output`（envelope、输出模式、meta 字段）、`muxcat help errors`（错误形状、错误码、退出码）。新增全局契约优先加 topic，不塞进 root Long。
+- **connector / 命令组 Long**：2-4 行简介 + 首连 quickstart + 该层特有规则（如 redis 的拦截策略）。
+- **leaf 命令**：`Example` 必填（1-4 条完整调用，不带 `$` 提示符，可用 `#` 注释行）；语义不直观的命令再补 `Long`（如 redis scan 的单轮模式、exec 的拦截与透传）。
+- 写作原则：help 写用法、docs 写设计，互不复制；help 文本统一英文。
+- 强制：`internal/cli` 的规约测试遍历命令树——每个命令 `Short` 非空、命令组 `Long` 非空、runnable leaf 有 `Example` 或 `Long`；新增命令漏写即测试失败。
+
+
 ## 目录结构与模块职责
 
 ```

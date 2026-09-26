@@ -11,6 +11,10 @@ func newConnectorCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "connector",
 		Short: "Manage connectors",
+		Long: `Connectors are muxcat's built-in backend clients, each mounted as a
+top-level command (e.g. redis, sqlite). This group inspects the
+registry; use a connector's own command tree to work with a backend
+(muxcat <connector> --help).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -24,6 +28,8 @@ func newConnectorLsCmd() *cobra.Command {
 		Use:   "ls",
 		Short: "List registered connectors",
 		Args:  cobra.NoArgs,
+		Example: `  muxcat connector ls
+  muxcat connector ls --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			names := connector.Names()
 			rows := make([][]any, 0, len(names))

@@ -21,6 +21,11 @@ func newConnCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "conn",
 		Short: "Manage redis connections",
+		Long: `Manage redis connections. conn add creates a same-named instance
+(endpoint) and connection (credentials, db, policies) in one step;
+one instance can back multiple connections (e.g. admin + readonly
+user). Passwords are stored encrypted and never echoed by ls/show.
+The default connection is used when -c/--conn is not passed.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -41,6 +46,9 @@ func newConnAddCmd() *cobra.Command {
 		Use:   "add <name>",
 		Short: "Add a connection (creates an instance of the same name)",
 		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat redis conn add local --host 127.0.0.1 --set-default
+  muxcat redis conn add prod --host redis.internal --tls --password s3cret --set-default
+  muxcat redis conn add cache --host 127.0.0.1 --db 2 --readonly`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -243,6 +251,8 @@ func newConnLsCmd() *cobra.Command {
 		Use:   "ls",
 		Short: "List all connections",
 		Args:  cobra.NoArgs,
+		Example: `  muxcat redis conn ls
+  muxcat redis conn ls --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -283,6 +293,8 @@ func newConnShowCmd() *cobra.Command {
 		Use:   "show <name>",
 		Short: "Show connection details (the password is never echoed)",
 		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat redis conn show local
+  muxcat redis conn show local --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -317,9 +329,10 @@ func newConnShowCmd() *cobra.Command {
 
 func newConnRmCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "rm <name>",
-		Short: "Remove a connection (its instance is removed too when unreferenced)",
-		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Use:     "rm <name>",
+		Short:   "Remove a connection (its instance is removed too when unreferenced)",
+		Args:    cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat redis conn rm cache --yes`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -380,9 +393,10 @@ func newConnRmCmd() *cobra.Command {
 
 func newConnDefaultCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "default <name>",
-		Short: "Set the default connection",
-		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Use:     "default <name>",
+		Short:   "Set the default connection",
+		Args:    cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat redis conn default prod`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -409,6 +423,8 @@ func newConnTestCmd() *cobra.Command {
 		Use:   "test <name>",
 		Short: "Test a connection (PING + read redis_version) and report latency",
 		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat redis conn test local
+  muxcat redis conn test prod --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()

@@ -127,7 +127,21 @@ func newExecCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "exec <cmd> [args...]",
 		Short: "Execute a raw Redis command (pass-through; interception rules apply)",
-		Args:  atLeastArgs(1, "<cmd> [args...]", "cmd"),
+		Long: `Execute a raw Redis command verbatim. This is the escape hatch for
+commands without a structured counterpart (HSET, LPUSH, XADD, ...).
+
+The connector's interception rules apply: a readonly connection allows
+read commands only, dangerous commands (FLUSHALL, CONFIG SET, ...)
+require a connection with allowDangerous, and SELECT is always blocked
+— pass --db n instead (each invocation uses its own connection).
+
+Flags must come before positional arguments; everything after the
+command name is passed through (negative arguments like 0 -1 work).`,
+		Args: atLeastArgs(1, "<cmd> [args...]", "cmd"),
+		Example: `  muxcat redis exec PING
+  muxcat redis exec HGETALL user:42
+  muxcat redis exec SETEX session:42 3600 payload
+  muxcat redis exec ZRANGE board 0 -1 WITHSCORES`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
@@ -180,6 +194,9 @@ func newGetCmd() *cobra.Command {
 		Use:   "get <key>",
 		Short: "Get the value of a key (null when the key does not exist)",
 		Args:  cli.ExactArgs(1, "<key>", "key"),
+		Example: `  muxcat redis get mykey
+  muxcat redis get session:42 -c cache
+  muxcat redis get blob --binary base64 --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
@@ -234,7 +251,14 @@ func newSetCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "set <key> [value]",
 		Short: "Set a key (OK, or null when the --nx/--xx condition is not met)",
-		Args:  cobra.RangeArgs(1, 2),
+		Long: `Set a key. The value comes from the positional argument, or from
+--file (binary-safe; "-" reads stdin). Counts as a write: readonly
+connections reject it.`,
+		Args: cobra.RangeArgs(1, 2),
+		Example: `  muxcat redis set mykey hello
+  muxcat redis set session:42 data --ttl 30m --nx
+  muxcat redis set blob --file ./payload.bin
+  gzip -c big.json | muxcat redis set big:gz --file -`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			nx, xx := cli.FlagBool(cmd, "nx"), cli.FlagBool(cmd, "xx")
@@ -326,6 +350,8 @@ func newDelCmd() *cobra.Command {
 		Use:   "del <key> [key...]",
 		Short: "Delete keys; reports how many were removed",
 		Args:  atLeastArgs(1, "<key> [key...]", "key"),
+		Example: `  muxcat redis del mykey
+  muxcat redis del k1 k2 k3 --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
@@ -376,7 +402,21 @@ func newScanCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "scan [pattern]",
 		Short: "Scan keys matching a pattern (SCAN-based; KEYS is never used)",
-		Args:  cobra.MaximumNArgs(1),
+		Long: `Scan keys with Redis SCAN (never the blocking KEYS). [pattern] is the
+MATCH pattern (default *), --type applies the server-side TYPE filter
+(Redis 6+), and --count tunes the per-batch COUNT (pacing only, not
+the result set).
+
+Default mode iterates to completion, capped by --limit (meta.truncated
+tells you the scan stopped early). With --cursor n it runs exactly one
+round from that cursor and returns the next cursor in the envelope's
+meta.cursor (0 means the iteration is complete); cursors are valid
+across invocations but carry no snapshot semantics.`,
+		Args: cobra.MaximumNArgs(1),
+		Example: `  muxcat redis scan 'user:*' --limit 20
+  muxcat redis scan --type hash --count 500
+  muxcat redis scan --cursor 0 --json        # one round; next cursor in meta.cursor
+  muxcat redis scan --db 2 'session:*'`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			pattern := "*"
@@ -473,9 +513,10 @@ func newScanCmd() *cobra.Command {
 
 func newTypeCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:   "type <key>",
-		Short: "Report the type of a key (none when the key does not exist)",
-		Args:  cli.ExactArgs(1, "<key>", "key"),
+		Use:     "type <key>",
+		Short:   "Report the type of a key (none when the key does not exist)",
+		Args:    cli.ExactArgs(1, "<key>", "key"),
+		Example: `  muxcat redis type mykey`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
@@ -511,6 +552,8 @@ func newTTLCmd() *cobra.Command {
 		Use:   "ttl <key>",
 		Short: "Report a key's TTL (-1 no expiry, -2 no such key)",
 		Args:  cli.ExactArgs(1, "<key>", "key"),
+		Example: `  muxcat redis ttl mykey
+  muxcat redis ttl mykey --ms`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
@@ -598,6 +641,8 @@ func newInfoCmd() *cobra.Command {
 		Use:   "info [section]",
 		Short: "Read server INFO (default sections, or one section)",
 		Args:  cobra.MaximumNArgs(1),
+		Example: `  muxcat redis info
+  muxcat redis info memory --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
@@ -635,6 +680,8 @@ func newDBSizeCmd() *cobra.Command {
 		Use:   "dbsize",
 		Short: "Report the number of keys in the current database",
 		Args:  cobra.NoArgs,
+		Example: `  muxcat redis dbsize
+  muxcat redis dbsize --db 3`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
@@ -670,6 +717,8 @@ func newHGetCmd() *cobra.Command {
 		Use:   "hget <key> <field>",
 		Short: "Get a hash field (null when missing)",
 		Args:  cli.ExactArgs(2, "<key> <field>", "key", "field"),
+		Example: `  muxcat redis hget user:42 name
+  muxcat redis hget user:42 avatar --binary base64`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
@@ -725,6 +774,8 @@ func newHGetAllCmd() *cobra.Command {
 		Use:   "hgetall <key>",
 		Short: "Get all fields and values of a hash (sorted by field)",
 		Args:  cli.ExactArgs(1, "<key>", "key"),
+		Example: `  muxcat redis hgetall user:42
+  muxcat redis hgetall user:42 --limit 50 --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
@@ -779,6 +830,8 @@ func newLRangeCmd() *cobra.Command {
 		Use:   "lrange <key> <start> <stop>",
 		Short: "Get a range of list elements (index column = start + offset)",
 		Args:  cli.ExactArgs(3, "<key> <start> <stop>", "key", "start", "stop"),
+		Example: `  muxcat redis lrange queue 0 -1
+  muxcat redis lrange queue 0 9 --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			startIdx, err := parseIntArg(cmd, "start", args[1])
@@ -839,6 +892,8 @@ func newSMembersCmd() *cobra.Command {
 		Use:   "smembers <key>",
 		Short: "Get all members of a set (sorted for stable output)",
 		Args:  cli.ExactArgs(1, "<key>", "key"),
+		Example: `  muxcat redis smembers tags
+  muxcat redis smembers tags --limit 100 --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
@@ -889,6 +944,8 @@ func newZRangeCmd() *cobra.Command {
 		Use:   "zrange <key> <start> <stop>",
 		Short: "Get a range of sorted set members with scores",
 		Args:  cli.ExactArgs(3, "<key> <start> <stop>", "key", "start", "stop"),
+		Example: `  muxcat redis zrange board 0 9
+  muxcat redis zrange board 0 -1 --rev --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			startIdx, err := parseIntArg(cmd, "start", args[1])
@@ -960,7 +1017,13 @@ func newEvalCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "eval [script]",
 		Short: "Run a Lua script (from an argument or --file; counts as a write)",
-		Args:  cobra.MaximumNArgs(1),
+		Long: `Run a Lua script (EVAL). The script comes from the positional
+argument or --file; --key entries map to KEYS[] and --arg entries to
+ARGV[], both repeatable and order-preserving. Counts as a write:
+readonly connections reject it.`,
+		Args: cobra.MaximumNArgs(1),
+		Example: `  muxcat redis eval "return redis.call('GET', KEYS[1])" --key mykey
+  muxcat redis eval --file ./rotate.lua --key k1 --key k2 --arg 10`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			file := cli.FlagString(cmd, "file")
@@ -1034,6 +1097,10 @@ func newConfigGroupCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "config",
 		Short: "Read server configuration",
+		Long: `Read server configuration. Only CONFIG GET is exposed (and only it
+passes the interception rules); CONFIG SET and friends are blocked
+unless the connection sets allowDangerous, and are then reachable via
+muxcat redis exec.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -1047,6 +1114,8 @@ func newConfigGetCmd() *cobra.Command {
 		Use:   "get [pattern]",
 		Short: "Read server configuration parameters (CONFIG GET; pattern defaults to *)",
 		Args:  cobra.MaximumNArgs(1),
+		Example: `  muxcat redis config get 'maxmemory*'
+  muxcat redis config get --json   # credentials (requirepass, ...) are masked as ***`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			pattern := "*"

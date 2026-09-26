@@ -41,6 +41,20 @@ func New() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "redis",
 		Short: "Redis connector",
+		Long: `Redis connector for standalone instances (Redis 6+, including
+Redis 8). Cluster / Sentinel / Pub-Sub are out of scope.
+
+Quickstart:
+  1. muxcat redis conn add local --host 127.0.0.1 --set-default
+  2. muxcat redis scan --limit 10
+  3. muxcat redis get mykey
+
+A connection carries credentials (encrypted at rest, never echoed), the
+logical db, and usage policies: readonly allows read commands only, and
+dangerous commands (FLUSHALL, CONFIG SET, ...) are blocked unless the
+connection sets allowDangerous. SELECT is blocked everywhere — every
+invocation uses its own connection; pass --db n to any keyspace command
+instead. The effective db is reported in the JSON envelope's meta.db.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},

@@ -73,6 +73,9 @@ func newUpgradeCmd(version string) *cobra.Command {
 		Use:   "upgrade",
 		Short: "Upgrade muxcat to the latest or a specified release",
 		Args:  cobra.NoArgs,
+		Example: `  muxcat upgrade --check                 # report availability only
+  muxcat upgrade --yes                   # upgrade to the latest release
+  muxcat upgrade --version v1.2.3 --yes  # pin a target version`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			start := time.Now()
 			rt := RuntimeFrom(cmd.Context())

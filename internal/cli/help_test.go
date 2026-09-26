@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+	"github.com/spf13/cobra"
 )
 
 func runHelp(t *testing.T, args ...string) string {
@@ -99,5 +100,61 @@ func TestFlagTokenRegex(t *testing.T) {
 	matches := flagTokenRe.FindAllString("  -c, --conn string   text\n      --json", -1)
 	if len(matches) != 3 {
 		t.Fatalf("matches = %v, want 3", matches)
+	}
+}
+
+// TestHelpConvention enforces the help-information convention (see
+// docs/architecture.md): every command has a Short, every command group
+// has a Long, and every runnable leaf has an Example (or a Long covering
+// the same ground). Help topics are non-runnable and exempt. Connectors
+// still pending the rollout are skipped until their phase lands.
+func TestHelpConvention(t *testing.T) {
+	pendingConnectors := map[string]bool{
+		"mysql":       true,
+		"openobserve": true,
+		"sqlite":      true,
+	}
+	var check func(c *cobra.Command)
+	check = func(c *cobra.Command) {
+		if c.Short == "" {
+			t.Errorf("%s: missing Short", c.CommandPath())
+		}
+		switch {
+		case c.HasAvailableSubCommands():
+			if c.Long == "" {
+				t.Errorf("%s: command group missing Long", c.CommandPath())
+			}
+		case c.Runnable():
+			if c.Example == "" && c.Long == "" {
+				t.Errorf("%s: leaf command needs an Example (or Long)", c.CommandPath())
+			}
+		}
+		for _, sub := range c.Commands() {
+			check(sub)
+		}
+	}
+	root := NewRoot("test")
+	check(root)
+	for _, c := range root.Commands() {
+		if pendingConnectors[c.Name()] {
+			continue
+		}
+		check(c)
+	}
+}
+
+// The help topics are reachable through `muxcat help <topic>` and appear
+// under root help's additional-topics section.
+func TestHelpTopics(t *testing.T) {
+	out := runHelp(t, "--help")
+	if !strings.Contains(out, "Additional help topics:") ||
+		!strings.Contains(out, "output") || !strings.Contains(out, "errors") {
+		t.Fatalf("root help should list the output/errors topics:\n%s", out)
+	}
+	for _, topic := range []string{"output", "errors"} {
+		out := runHelp(t, "help", topic)
+		if !strings.Contains(out, "envelope") && !strings.Contains(out, "Exit codes") {
+			t.Fatalf("help %s: unexpected content:\n%s", topic, out)
+		}
 	}
 }

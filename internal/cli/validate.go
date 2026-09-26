@@ -21,6 +21,8 @@ func newConfigValidateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "validate [file...]",
 		Short: "Validate config files against the embedded JSON Schemas",
+		Example: `  muxcat config validate                 # all config files in the config dir
+  muxcat config validate redis.json      # specific files, matched by base name`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			type target struct{ label, path string }
 			var targets []target

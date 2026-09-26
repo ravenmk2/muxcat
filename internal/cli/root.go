@@ -48,7 +48,22 @@ func NewRoot(version string) *cobra.Command {
 		Use:   "muxcat",
 		Short: "Universal CLI client for infrastructure backends",
 		// The first line carries the version in plain text, without styling.
-		Long:          "🐱 muxcat — universal CLI client for infrastructure backends (" + version + ")",
+		Long: `🐱 muxcat — universal CLI client for infrastructure backends (` + version + `)
+
+One CLI for databases, caches, message queues and observability
+platforms, with uniform connection management and a structured output
+contract. Credentials are stored encrypted (enc:v1:) and never echoed
+in any output mode.
+
+Getting started (three steps):
+  1. Add a connection:  muxcat redis conn add local --host 127.0.0.1 --set-default
+  2. Run commands:      muxcat redis get mykey
+  3. Pick another conn: muxcat redis get mykey -c other
+
+Every level explains itself: muxcat <connector> --help,
+muxcat <connector> <command> --help. Global contracts:
+  muxcat help output   envelope shape, output modes, meta fields
+  muxcat help errors   error format, error codes, exit codes`,
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -73,6 +88,7 @@ func NewRoot(version string) *cobra.Command {
 	root.AddCommand(newConfigCmd())
 	root.AddCommand(newConnectorCmd())
 	root.AddCommand(newUpgradeCmd(version))
+	root.AddCommand(newHelpTopics()...)
 	for _, c := range connector.Commands() {
 		root.AddCommand(c)
 	}

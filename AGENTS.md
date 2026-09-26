@@ -23,9 +23,13 @@ muxcat/
 
 文档变化时同步更新
 
-- docs/architecture.md：总体架构——三层模型、配置、安全、输出契约
+- docs/architecture.md：总体架构——三层模型、配置、安全、输出契约、帮助信息约定
 - docs/upgrade.md：自更新设计——upgrade 命令、下载重试、平台自替换
 - docs/connectors/：每个 connector 一份独立设计文档
+
+## 帮助信息约定
+
+**新增或修改命令时必须同步帮助信息**（详见 docs/architecture.md「帮助信息约定」）：每个命令 `Short` 非空；命令组要有 `Long`（简介 + quickstart）;runnable leaf 必须有 `Example`（1-4 条完整调用）；语义不直观再补 `Long`。`internal/cli` 的命令树规约测试会强制此约定，漏写即失败。
 
 ## 安全规范
 
