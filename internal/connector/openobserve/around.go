@@ -16,7 +16,17 @@ func newQueryAroundCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "around <stream>",
 		Short: "Show records around a given timestamp (GET /api/{org}/{stream}/_around)",
-		Args:  cli.ExactArgs(1, "<stream>", "stream"),
+		Long: `Show the records around an anchor timestamp (GET
+/api/{org}/{stream}/_around). The server fixes a ±15 minute window
+around --key; --size is the total record budget, split evenly
+between both sides. --key (required) accepts unix microseconds,
+RFC3339, a negative duration like -1h, or now, and need not hit a
+real record. --size must be >= 2 (size=1 would mean unlimited
+server-side).`,
+		Args: cli.ExactArgs(1, "<stream>", "stream"),
+		Example: `  muxcat openobserve query around app_logs --key 2026-07-03T12:00:00Z
+  muxcat openobserve query around app_logs --key 1719900000000000 --size 20
+  muxcat openobserve query around app_logs --key -5m --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			keyStr := cli.FlagString(cmd, "key")

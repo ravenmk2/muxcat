@@ -110,8 +110,7 @@ func TestFlagTokenRegex(t *testing.T) {
 // still pending the rollout are skipped until their phase lands.
 func TestHelpConvention(t *testing.T) {
 	pendingConnectors := map[string]bool{
-		"openobserve": true,
-		"sqlite":      true,
+		"sqlite": true,
 	}
 	var check func(c *cobra.Command)
 	check = func(c *cobra.Command) {

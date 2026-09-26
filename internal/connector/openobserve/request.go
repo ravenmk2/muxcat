@@ -42,6 +42,9 @@ Discover available endpoints from the server's OpenAPI spec first:
   muxcat o2 apidoc ls [--keyword k]   # list endpoints (method, path, summary)
   muxcat o2 apidoc show <path>        # show one endpoint's spec fragment`,
 		Args: cli.ExactArgs(2, "<method> <path>", "method", "path"),
+		Example: `  muxcat openobserve request GET /api/default/streams
+  muxcat openobserve request POST /api/default/app_logs/_json --file logs.json
+  cat body.json | muxcat o2 request PUT /api/default/streams/app_logs/settings --file -`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			method := strings.ToUpper(args[0])

@@ -39,6 +39,20 @@ func New() *cobra.Command {
 		Use:     "openobserve",
 		Aliases: []string{"o2"},
 		Short:   "OpenObserve connector",
+		Long: `OpenObserve connector over the REST API (HTTP basic auth), a
+plain net/http client with no external driver.
+
+Quickstart:
+  1. muxcat openobserve conn add local --url http://127.0.0.1:5080 --username root@example.com --set-default
+  2. muxcat openobserve stream ls
+  3. muxcat openobserve query "SELECT * FROM app_logs" --last 15m
+
+A connection carries the organization (org, default "default"),
+credentials (encrypted at rest, never echoed), and policies: readonly
+allows GET/HEAD requests only and refuses ingest. The command name is
+openobserve (alias o2), and query also answers to search.
+Metrics/traces ingestion and admin APIs are out of scope — use
+request to pass any endpoint through.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},

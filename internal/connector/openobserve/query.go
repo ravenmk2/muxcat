@@ -39,7 +39,24 @@ func newQueryCmd() *cobra.Command {
 		Use:     "query [<sql>]",
 		Aliases: []string{"search"},
 		Short:   "Query logs with SQL (POST /api/{org}/_search)",
-		Args:    cobra.MaximumNArgs(1),
+		Long: `Query logs with SQL (POST /api/{org}/_search). The SQL comes
+from the positional argument or --sql-file <path> (- reads stdin);
+the two are mutually exclusive.
+
+The time window defaults to the last hour: --last picks a relative
+window, or give --start-time/--end-time as unix microseconds,
+RFC3339, a negative duration like -1h, or now. --from/--size page
+the hits.
+
+Text modes render a dynamic table (_timestamp pinned as the first
+column, nested values as compact JSON); --json carries the raw
+_search response. Server error hints and suggestions are passed
+through in error.hint for self-correction.`,
+		Args: cobra.MaximumNArgs(1),
+		Example: `  muxcat openobserve query "SELECT * FROM app_logs" --last 15m
+  muxcat openobserve query "SELECT level, count(*) FROM app_logs GROUP BY level" --start-time -6h
+  muxcat openobserve query --sql-file report.sql --json
+  echo "SELECT * FROM app_logs" | muxcat o2 query --sql-file -`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			sql, err := resolveSQL(cmd, args)

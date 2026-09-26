@@ -20,6 +20,11 @@ func newApiDocCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "apidoc",
 		Short: "Explore the server's OpenAPI spec (/api-doc/openapi.json)",
+		Long: `Explore the server's OpenAPI spec (GET /api-doc/openapi.json):
+list endpoints, inspect one endpoint's parameters and schemas, then
+call it with muxcat openobserve request. Servers without the spec
+endpoint (older versions) report an error pointing at the official
+docs.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -101,6 +106,8 @@ func newApiDocLsCmd() *cobra.Command {
 		Use:   "ls",
 		Short: "List endpoints of the server's OpenAPI spec",
 		Args:  cobra.NoArgs,
+		Example: `  muxcat openobserve apidoc ls
+  muxcat openobserve apidoc ls --keyword search --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			start := time.Now()
 			name, _, spec, err := fetchSpec(cmd)
@@ -136,7 +143,16 @@ func newApiDocShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "show <path>",
 		Short: "Show the OpenAPI spec fragment of one endpoint",
-		Args:  cli.ExactArgs(1, "<path>", "path"),
+		Long: `Show the OpenAPI spec fragment of one endpoint (methods,
+parameters, schemas). The path accepts the spec form
+(/api/{org_id}/_search), a parameter-name variant
+(/api/{org}/_search), or a concrete path (/api/default/_search):
+{param} segments match any concrete segment; an ambiguous match
+lists its candidates. Text mode appends a ready-to-run request
+example with the connection's real org.`,
+		Args: cli.ExactArgs(1, "<path>", "path"),
+		Example: `  muxcat openobserve apidoc show /api/default/_search
+  muxcat openobserve apidoc show "/api/{org_id}/_search" --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			name, conn, spec, err := fetchSpec(cmd)

@@ -65,6 +65,9 @@ func newStreamCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "stream",
 		Short: "Inspect OpenObserve streams",
+		Long: `Inspect the streams of the connection's organization: list
+streams of a type (logs by default), or show one stream's schema
+fields.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -78,6 +81,9 @@ func newStreamLsCmd() *cobra.Command {
 		Use:   "ls",
 		Short: "List streams (GET /api/{org}/streams)",
 		Args:  cobra.NoArgs,
+		Example: `  muxcat openobserve stream ls
+  muxcat openobserve stream ls --type traces
+  muxcat openobserve stream ls --fetch-schema --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			start := time.Now()
 			streamType := cli.FlagString(cmd, "type")
@@ -136,6 +142,8 @@ func newStreamSchemaCmd() *cobra.Command {
 		Use:   "schema <name>",
 		Short: "Show a stream's schema (GET /api/{org}/streams/{name}/schema)",
 		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat openobserve stream schema app_logs
+  muxcat openobserve stream schema app_logs --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			streamType := cli.FlagString(cmd, "type")

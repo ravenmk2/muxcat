@@ -19,6 +19,10 @@ func newIngestCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "ingest",
 		Short: "Ingest telemetry data into OpenObserve",
+		Long: `Ingest telemetry data into OpenObserve. Only log records are
+covered in this iteration (metrics/traces slots are reserved — pass
+them through with muxcat openobserve request in the meantime).
+Ingest is refused on readonly connections.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -31,7 +35,17 @@ func newIngestLogsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "logs <stream>",
 		Short: "Ingest log records (POST /api/{org}/{stream}/_json or _multi)",
-		Args:  cli.ExactArgs(1, "<stream>", "stream"),
+		Long: `Ingest log records into a stream. The payload comes from
+--file <path>, --file - (stdin), or a piped stdin. --format json
+expects a JSON array of records (the _json endpoint); --format
+multi expects NDJSON, one JSON object per line (the _multi
+endpoint). The payload is validated client-side before it is sent.
+Partial ingest failures are reported per record on stderr, but the
+exit code stays 0 for a completed exchange.`,
+		Args: cli.ExactArgs(1, "<stream>", "stream"),
+		Example: `  muxcat openobserve ingest logs app_logs --file records.json
+  echo '[{"level":"info","msg":"hello"}]' | muxcat openobserve ingest logs app_logs
+  muxcat openobserve ingest logs app_logs --file records.ndjson --format multi`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			format := cli.FlagString(cmd, "format")

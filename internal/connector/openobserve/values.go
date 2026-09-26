@@ -18,7 +18,16 @@ func newQueryValuesCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "values <stream>",
 		Short: "List field values of a stream (GET /api/{org}/{stream}/_values)",
-		Args:  cli.ExactArgs(1, "<stream>", "stream"),
+		Long: `List the values fields take within a time window (GET
+/api/{org}/{stream}/_values) — e.g. "which values does level
+have". --fields is required and comma-separated; the time window
+flags match query and default to the last hour. Text modes merge
+the response into one field, value, count table (count is empty
+with --no-count).`,
+		Args: cli.ExactArgs(1, "<stream>", "stream"),
+		Example: `  muxcat openobserve query values app_logs --fields level --last 24h
+  muxcat openobserve query values app_logs --fields level,code --keyword err
+  muxcat openobserve query values app_logs --fields level --no-count --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			fields, err := parseFields(cli.FlagString(cmd, "fields"))

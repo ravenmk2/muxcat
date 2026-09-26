@@ -22,6 +22,12 @@ func newConnCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "conn",
 		Short: "Manage openobserve connections",
+		Long: `Manage openobserve connections. conn add creates a same-named
+instance (endpoint url) and connection (org, credentials, policies)
+in one step; one instance can back multiple connections (different
+orgs or users). Passwords are stored encrypted and never echoed by
+ls/show. The default connection is used when -c/--conn is not
+passed.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -42,6 +48,9 @@ func newConnAddCmd() *cobra.Command {
 		Use:   "add <name>",
 		Short: "Add a connection (creates an instance of the same name)",
 		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat openobserve conn add local --url http://127.0.0.1:5080 --username root@example.com --set-default
+  muxcat openobserve conn add prod --url https://o2.internal --username app@example.com --password s3cret --timeout 30s --set-default
+  muxcat openobserve conn add ro --url http://127.0.0.1:5080 --username reader@example.com --readonly`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -197,6 +206,8 @@ func newConnLsCmd() *cobra.Command {
 		Use:   "ls",
 		Short: "List all connections",
 		Args:  cobra.NoArgs,
+		Example: `  muxcat openobserve conn ls
+  muxcat openobserve conn ls --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -234,6 +245,8 @@ func newConnShowCmd() *cobra.Command {
 		Use:   "show <name>",
 		Short: "Show connection details (the password is never echoed)",
 		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat openobserve conn show local
+  muxcat openobserve conn show local --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -265,9 +278,10 @@ func newConnShowCmd() *cobra.Command {
 
 func newConnRmCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "rm <name>",
-		Short: "Remove a connection (its instance is removed too when unreferenced)",
-		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Use:     "rm <name>",
+		Short:   "Remove a connection (its instance is removed too when unreferenced)",
+		Args:    cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat openobserve conn rm ro --yes`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -328,9 +342,10 @@ func newConnRmCmd() *cobra.Command {
 
 func newConnDefaultCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "default <name>",
-		Short: "Set the default connection",
-		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Use:     "default <name>",
+		Short:   "Set the default connection",
+		Args:    cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat openobserve conn default prod`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -357,6 +372,8 @@ func newConnTestCmd() *cobra.Command {
 		Use:   "test <name>",
 		Short: "Test a connection (auth check + read server version) and report latency",
 		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat openobserve conn test local
+  muxcat openobserve conn test prod --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
