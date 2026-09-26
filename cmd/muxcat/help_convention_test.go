@@ -24,7 +24,7 @@ func TestHelpConvention(t *testing.T) {
 	for _, c := range root.Commands() {
 		mounted[c.Name()] = true
 	}
-	for _, name := range []string{"etcd", "mysql", "openobserve", "redis", "sqlite"} {
+	for _, name := range []string{"etcd", "jenkins", "mysql", "openobserve", "redis", "sqlite"} {
 		if !mounted[name] {
 			t.Fatalf("connector %q is not mounted; the convention check would be vacuous", name)
 		}

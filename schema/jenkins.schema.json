@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ravenmk2/muxcat/schema/jenkins.schema.json",
+  "title": "jenkins connector config (jenkins.json)",
+  "allOf": [
+    { "$ref": "connector-common.schema.json#/$defs/connectorDoc" }
+  ],
+  "properties": {
+    "instances": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/jenkinsInstance" }
+    },
+    "connections": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/jenkinsConnection" }
+    }
+  },
+  "$defs": {
+    "jenkinsInstance": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "url": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "jenkinsConnection": {
+      "type": "object",
+      "required": ["instance"],
+      "properties": {
+        "instance": { "type": "string", "minLength": 1 },
+        "username": { "type": "string" },
+        "token": { "type": "string" },
+        "readonly": { "type": "boolean" },
+        "timeout": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

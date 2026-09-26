@@ -60,7 +60,7 @@ muxcat/
 | RabbitMQ | 📋 |
 | AMQP | 📋 |
 | EMQX | 📋 |
-| Jenkins | 📋 |
+| Jenkins | ✅ |
 | TUI | 📋 |
 | 跨类型 conn ls 汇总 | 📋 |
 | 密钥轮换 | 📋 |
