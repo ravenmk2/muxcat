@@ -109,3 +109,21 @@ func RenderResult(cmd *cobra.Command, r *output.Result, meta output.Meta) error 
 	}
 	return renderer.Render(cmd.OutOrStdout(), r)
 }
+
+// RenderPartial renders a partial result followed by an error: text modes
+// render r normally and return err (the error text goes to stderr at exit);
+// json mode skips rendering and attaches r.Payload() to the error so the
+// failure envelope still carries the partial data.
+func RenderPartial(cmd *cobra.Command, r *output.Result, meta output.Meta, err error) error {
+	renderer, mode, rerr := resolveRenderer(cmd)
+	if rerr != nil {
+		return rerr
+	}
+	if mode == output.ModeJSON {
+		return output.ToError(err).WithData(r.Payload())
+	}
+	if rerr := renderer.Render(cmd.OutOrStdout(), r); rerr != nil {
+		return rerr
+	}
+	return err
+}

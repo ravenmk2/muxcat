@@ -33,7 +33,13 @@ command's --max-bytes (value size). Connectors may add meta fields
 (e.g. redis reports db, and cursor in scan's single-round mode).
 
 In plain/tsv modes single values print bare (no labels), tables print
-as columns; JSON envelope shape is unaffected.`,
+as columns; JSON envelope shape is unaffected.
+
+Degraded results: a command may produce partial data and still fail
+(e.g. etcd endpoint status when some endpoints are down). Text modes
+print the partial result on stdout first, then the Error/Hint lines go
+to stderr with a non-zero exit code; with --json the envelope carries
+"ok": false and the partial result in data alongside the error.`,
 		},
 		{
 			Use:   "errors",

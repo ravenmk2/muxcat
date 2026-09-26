@@ -2,7 +2,10 @@ package etcd
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -18,11 +21,15 @@ func newEndpointCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "endpoint",
 		Short: "Inspect cluster endpoints",
-		Long: `Inspect the instance's endpoints. status calls maintenance Status
-on every endpoint, health probes every endpoint with a Get (the same
-approach as etcdctl endpoint health). A failed endpoint degrades to a
-row with only the error column filled; the command fails only when
-every endpoint fails.`,
+		Long: `Inspect cluster endpoints. status calls maintenance Status on every
+endpoint, health probes every endpoint with a Get plus an alarm check
+(the same semantics as etcdctl endpoint health). Both support
+--cluster: probe every cluster member (client URLs discovered via
+MemberList) instead of the configured endpoints.
+
+A failed endpoint degrades to a row with only the error column filled;
+the partial table still renders and the command then exits non-zero
+(degraded result, see: muxcat help output).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -31,12 +38,53 @@ every endpoint fails.`,
 	return c
 }
 
+// lazyClient builds a client without any reachability probe, so a dead
+// first endpoint cannot sink whole-cluster inspection commands.
+func lazyClient(cfg *Config, conn Connection, timeout time.Duration) (*clientv3.Client, error) {
+	cc, err := clientConfig(cfg, conn, timeout)
+	if err != nil {
+		return nil, err
+	}
+	client, err := clientv3.New(*cc)
+	if err != nil {
+		return nil, classifyErr(err, "failed to connect")
+	}
+	return client, nil
+}
+
+// probeTargets resolves the endpoints to probe: the instance's endpoints,
+// or every member's client URLs with --cluster (discovered via MemberList
+// on the lazy client).
+func probeTargets(ctx context.Context, client *clientv3.Client, inst Instance, cluster bool) ([]string, error) {
+	if !cluster {
+		return inst.Endpoints, nil
+	}
+	resp, err := client.MemberList(ctx)
+	if err != nil {
+		return nil, classifyErr(err, "member list failed")
+	}
+	var targets []string
+	for _, m := range resp.Members {
+		targets = append(targets, m.ClientURLs...)
+	}
+	if len(targets) == 0 {
+		return nil, output.NewError(output.CodeQueryError,
+			"no client URLs found in the cluster membership", "")
+	}
+	return targets, nil
+}
+
 func newEndpointStatusCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:   "status",
-		Short: "Report maintenance Status for every endpoint of the instance",
-		Args:  cobra.NoArgs,
+		Short: "Report maintenance Status for every endpoint",
+		Long: `Report maintenance Status for every endpoint, each with its own
+timeout budget. A failed endpoint degrades to a row with only the
+error column filled; any failure makes the command exit non-zero
+after rendering the partial table (degraded result).`,
+		Args: cobra.NoArgs,
 		Example: `  muxcat etcd endpoint status
+  muxcat etcd endpoint status --cluster
   muxcat etcd endpoint status -c prod --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			start := time.Now()
@@ -48,20 +96,31 @@ func newEndpointStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ctx, cancel, client, err := dial(cmd, cfg, conn)
+			timeout, err := queryTimeout(conn, cli.FlagTimeout(cmd))
 			if err != nil {
 				return err
 			}
-			defer cancel()
+			client, err := lazyClient(cfg, conn, timeout)
+			if err != nil {
+				return err
+			}
 			defer func() { _ = client.Close() }()
+			mctx, mcancel := context.WithTimeout(cmd.Context(), timeout)
+			targets, err := probeTargets(mctx, client, inst, cli.FlagBool(cmd, "cluster"))
+			mcancel()
+			if err != nil {
+				return err
+			}
 
 			columns := []string{"endpoint", "id", "version", "db_size", "is_leader",
 				"raft_term", "raft_index", "raft_applied_index", "error"}
-			rows := make([][]any, 0, len(inst.Endpoints))
+			rows := make([][]any, 0, len(targets))
 			var lastErr error
 			failures := 0
-			for _, ep := range inst.Endpoints {
-				resp, err := client.Status(ctx, ep)
+			for _, ep := range targets {
+				ectx, ecancel := context.WithTimeout(cmd.Context(), timeout)
+				resp, err := client.Status(ectx, ep)
+				ecancel()
 				if err != nil {
 					failures++
 					lastErr = err
@@ -72,23 +131,41 @@ func newEndpointStatusCmd() *cobra.Command {
 					resp.Leader == resp.Header.MemberId, resp.RaftTerm,
 					resp.RaftIndex, resp.RaftAppliedIndex, ""})
 			}
-			if failures == len(inst.Endpoints) {
-				return classifyErr(lastErr, "endpoint status failed")
+			m := meta(cfg, conn, name, start, false)
+			res := &output.Result{Columns: columns, Rows: rows}
+			if failures > 0 {
+				return cli.RenderPartial(cmd, res, m, classifyErr(lastErr,
+					fmt.Sprintf("%d of %d endpoints failed", failures, len(targets))))
 			}
-			return cli.RenderResult(cmd, &output.Result{
-				Columns: columns,
-				Rows:    rows,
-			}, meta(cfg, conn, name, start, false))
+			return cli.RenderResult(cmd, res, m)
 		},
 	}
+	c.Flags().Bool("cluster", false, "probe every cluster member (client URLs via MemberList) instead of the configured endpoints")
+	return c
+}
+
+// healthProbe is the per-endpoint outcome of an endpoint health probe.
+type healthProbe struct {
+	endpoint string
+	healthy  bool
+	tookMS   int64
+	errText  string
+	err      error
 }
 
 func newEndpointHealthCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:   "health",
-		Short: "Probe every endpoint of the instance (per-endpoint Get, like etcdctl)",
-		Args:  cobra.NoArgs,
+		Short: "Probe every endpoint (parallel Get + alarm check, like etcdctl)",
+		Long: `Probe every endpoint in parallel with a dedicated single-endpoint
+client: a bounded Get("health") proves liveness (permission denied
+still counts, the endpoint answered), then the alarm list is checked —
+active alarms (NOSPACE, CORRUPT) mark the endpoint unhealthy. Any
+unhealthy endpoint makes the command exit non-zero after rendering
+the partial table (degraded result).`,
+		Args: cobra.NoArgs,
 		Example: `  muxcat etcd endpoint health
+  muxcat etcd endpoint health --cluster
   muxcat etcd endpoint health --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			start := time.Now()
@@ -104,55 +181,104 @@ func newEndpointHealthCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			client, err := lazyClient(cfg, conn, timeout)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = client.Close() }()
+			mctx, mcancel := context.WithTimeout(cmd.Context(), timeout)
+			targets, err := probeTargets(mctx, client, inst, cli.FlagBool(cmd, "cluster"))
+			mcancel()
+			if err != nil {
+				return err
+			}
 
-			// Probe each endpoint with its own client (a shared client would
-			// let the balancer pick any endpoint); a permission-denied Get
-			// still proves the endpoint is alive and authenticated.
-			columns := []string{"endpoint", "health", "took_ms", "error"}
-			rows := make([][]any, 0, len(inst.Endpoints))
-			var lastErr error
+			probes := make([]healthProbe, len(targets))
+			var wg sync.WaitGroup
+			for i, ep := range targets {
+				wg.Add(1)
+				go func(i int, ep string) {
+					defer wg.Done()
+					probes[i] = probeHealth(cmd, cfg, conn, ep, timeout)
+				}(i, ep)
+			}
+			wg.Wait()
+
+			rows := make([][]any, 0, len(probes))
 			failures := 0
-			for _, ep := range inst.Endpoints {
-				epStart := time.Now()
-				err := probeEndpoint(cmd, cfg, conn, ep, timeout)
-				took := time.Since(epStart).Milliseconds()
-				switch {
-				case err == nil || isPermissionErr(err):
-					rows = append(rows, []any{ep, true, took, ""})
-				default:
-					failures++
-					lastErr = err
-					rows = append(rows, []any{ep, false, took, err.Error()})
+			var lastErr error
+			for _, p := range probes {
+				rows = append(rows, []any{p.endpoint, p.healthy, p.tookMS, p.errText})
+				if p.healthy {
+					continue
+				}
+				failures++
+				if p.err != nil {
+					lastErr = p.err
 				}
 			}
-			if failures == len(inst.Endpoints) {
-				return classifyErr(lastErr, "endpoint health failed")
-			}
-			return cli.RenderResult(cmd, &output.Result{
-				Columns: columns,
+			m := meta(cfg, conn, name, start, false)
+			res := &output.Result{
+				Columns: []string{"endpoint", "health", "took_ms", "error"},
 				Rows:    rows,
-			}, meta(cfg, conn, name, start, false))
+			}
+			if failures > 0 {
+				if lastErr == nil {
+					lastErr = errors.New("active alarms")
+				}
+				return cli.RenderPartial(cmd, res, m, classifyErr(lastErr,
+					fmt.Sprintf("%d of %d endpoints unhealthy", failures, len(targets))))
+			}
+			return cli.RenderResult(cmd, res, m)
 		},
 	}
+	c.Flags().Bool("cluster", false, "probe every cluster member (client URLs via MemberList) instead of the configured endpoints")
+	return c
 }
 
-// probeEndpoint issues a bounded Get("health") against a single endpoint
-// with a dedicated single-endpoint client.
-func probeEndpoint(cmd *cobra.Command, cfg *Config, conn Connection, endpoint string, timeout time.Duration) error {
+// probeHealth probes one endpoint with a dedicated single-endpoint client
+// (a shared client would let the balancer pick any endpoint).
+func probeHealth(cmd *cobra.Command, cfg *Config, conn Connection, endpoint string, timeout time.Duration) healthProbe {
+	start := time.Now()
+	p := healthProbe{endpoint: endpoint}
+	fail := func(err error, text string) healthProbe {
+		p.err, p.errText = err, text
+		p.tookMS = time.Since(start).Milliseconds()
+		return p
+	}
 	cc, err := clientConfig(cfg, conn, timeout)
 	if err != nil {
-		return err
+		return fail(err, err.Error())
 	}
 	cc.Endpoints = []string{endpoint}
 	client, err := clientv3.New(*cc)
 	if err != nil {
-		return err
+		return fail(err, err.Error())
 	}
 	defer func() { _ = client.Close() }()
 	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 	defer cancel()
-	_, err = client.Get(ctx, "health")
-	return err
+	if _, err := client.Get(ctx, "health"); err != nil && !isPermissionErr(err) {
+		return fail(err, err.Error())
+	}
+	p.healthy = true
+	resp, err := client.AlarmList(ctx)
+	if err != nil {
+		p.healthy = false
+		return fail(err, "Unable to fetch the alarm list")
+	}
+	var active []string
+	for _, a := range resp.Alarms {
+		if a.Alarm != etcdserverpb.AlarmType_NONE {
+			active = append(active, a.Alarm.String())
+		}
+	}
+	if len(active) > 0 {
+		p.healthy = false
+		p.errText = "Active Alarm(s): " + strings.Join(active, ", ")
+	}
+	p.tookMS = time.Since(start).Milliseconds()
+	return p
 }
 
 // newMemberCmd builds the member inspection group.

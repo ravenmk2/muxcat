@@ -113,7 +113,11 @@ func exitError(root *cobra.Command, err error) int {
 	e := output.ToError(err)
 	jsonOut, _ := root.PersistentFlags().GetBool("json")
 	if jsonOut {
-		_ = output.WriteEnvelope(os.Stdout, output.Failure(e, output.Meta{}))
+		env := output.Failure(e, output.Meta{})
+		if e.Data != nil {
+			env.Data = e.Data
+		}
+		_ = output.WriteEnvelope(os.Stdout, env)
 	} else {
 		noColor, _ := root.PersistentFlags().GetBool("no-color")
 		color := output.ResolveColor(loadDefaults().color, noColor, isatty.IsTerminal(os.Stderr.Fd()))

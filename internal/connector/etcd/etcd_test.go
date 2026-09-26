@@ -539,3 +539,96 @@ func TestClusterCommandsUnreachable(t *testing.T) {
 		}
 	}
 }
+
+// TestEndpointStatusDegraded covers the degraded-result contract on a
+// closed port: the command fails with a connect-class error; json mode
+// attaches the partial payload to the error (nothing rendered), text mode
+// renders the partial table and returns the error.
+func TestEndpointStatusDegraded(t *testing.T) {
+	setupEnv(t)
+	addConn(t, "down", "--endpoints", "127.0.0.1:1", "--timeout", "2s", "--set-default")
+
+	out, err := runMuxcat(t, "etcd", "endpoint", "status", "--json")
+	if err == nil {
+		t.Fatal("closed port should fail")
+	}
+	e := output.ToError(err)
+	if e.Code != output.CodeConnectFailed && e.Code != output.CodeTimeout {
+		t.Fatalf("code = %s, want CONNECT_FAILED or TIMEOUT (msg: %s)", e.Code, e.Message)
+	}
+	if output.ExitCode(err) != output.ExitConnect {
+		t.Fatalf("exit = %d, want %d", output.ExitCode(err), output.ExitConnect)
+	}
+	payload, ok := e.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("json mode should attach the partial payload, got %#v", e.Data)
+	}
+	rows, _ := payload["rows"].([][]any)
+	if len(rows) != 1 || rows[0][0] != "127.0.0.1:1" {
+		t.Fatalf("payload rows = %#v", payload["rows"])
+	}
+	if errText, _ := rows[0][8].(string); errText == "" {
+		t.Fatalf("error column should be filled: %#v", rows[0])
+	}
+	if out != "" {
+		t.Fatalf("json mode should not render the table, got %q", out)
+	}
+
+	out, err = runMuxcat(t, "etcd", "endpoint", "status")
+	if err == nil {
+		t.Fatal("closed port should fail in text mode too")
+	}
+	if !strings.Contains(out, "127.0.0.1:1") || !strings.Contains(out, "error") {
+		t.Fatalf("text mode should render the partial table, got %q", out)
+	}
+}
+
+// TestEndpointHealthDegraded covers the degraded path of endpoint health:
+// every probe fails on a closed port, the payload carries health=false rows.
+func TestEndpointHealthDegraded(t *testing.T) {
+	setupEnv(t)
+	addConn(t, "down", "--endpoints", "127.0.0.1:1", "--timeout", "2s", "--set-default")
+	_, err := runMuxcat(t, "etcd", "endpoint", "health", "--json")
+	if err == nil {
+		t.Fatal("closed port should fail")
+	}
+	e := output.ToError(err)
+	if e.Code != output.CodeConnectFailed && e.Code != output.CodeTimeout {
+		t.Fatalf("code = %s, want CONNECT_FAILED or TIMEOUT (msg: %s)", e.Code, e.Message)
+	}
+	payload, ok := e.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("json mode should attach the partial payload, got %#v", e.Data)
+	}
+	rows, _ := payload["rows"].([][]any)
+	if len(rows) != 1 || rows[0][1] != false {
+		t.Fatalf("health row should be unhealthy: %#v", payload["rows"])
+	}
+	if errText, _ := rows[0][3].(string); errText == "" {
+		t.Fatalf("error column should be filled: %#v", rows[0])
+	}
+}
+
+// TestEndpointClusterUnreachable: --cluster resolves probe targets via
+// MemberList, which fails against a closed port before any probing (no
+// partial data).
+func TestEndpointClusterUnreachable(t *testing.T) {
+	setupEnv(t)
+	addConn(t, "down", "--endpoints", "127.0.0.1:1", "--timeout", "2s", "--set-default")
+	for _, args := range [][]string{
+		{"etcd", "endpoint", "status", "--cluster"},
+		{"etcd", "endpoint", "health", "--cluster"},
+	} {
+		_, err := runMuxcat(t, args...)
+		if err == nil {
+			t.Fatalf("%v: MemberList should fail against a closed port", args)
+		}
+		e := output.ToError(err)
+		if e.Code != output.CodeConnectFailed && e.Code != output.CodeTimeout {
+			t.Fatalf("%v: code = %s, want CONNECT_FAILED or TIMEOUT (msg: %s)", args, e.Code, e.Message)
+		}
+		if e.Data != nil {
+			t.Fatalf("%v: no partial data expected when MemberList fails, got %#v", args, e.Data)
+		}
+	}
+}

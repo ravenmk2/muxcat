@@ -32,6 +32,7 @@ muxcat 是一个面向基础设施后端的统一命令行客户端：以内置 
 - 单元格格式化：文本模式（table/plain/tsv）经 `Result.CellStyle` 格式化单元格——这是 connector 的可选声明（opt-in）；未声明（nil）时为 legacy 默认：nil → 空串、`[]byte` → string、其余 `fmt.Sprint`、无类别着色。声明后按配置渲染：`NullText`（如 `NULL`）、`BinaryHex`（二进制类型列的 `[]byte` → `0x` 大写 hex，类型取自 `Result.ColumnTypes` 的 `DatabaseTypeName()`）、`DateLayout`/`TimeLayout`（`time.Time` 布局）、`Palette`（按类别着色）。table 模式总宽超过终端宽度时从最宽列压缩单元格（`…` 尾缀，列下限保护），plain/tsv/json 不截断。
 - 降级：stdin/stdout 任一为管道视为非 TTY，auto 降级 plain 且**全局禁止交互**（缺必填参数直接报 `MISSING_ARGUMENT`，绝不等待输入）。
 - 颜色：`props.defaults.color`（auto|always|never）+ `--no-color` + `NO_COLOR` 环境变量共同决定；非 TTY 强制无色。真彩色靠 lipgloss/termenv 自动检测，不加独立配置。颜色开启时，文本模式下 `Result.Syntax` 指定的 chroma lexer 会对输出做语法高亮（如 redis get 的 JSON 值）。
+- degraded result（携带部分数据的失败）：命令可产出部分结果仍以错误结束（如 `etcd endpoint status` 部分 endpoint 失败）。实现：`cli.RenderPartial` —— 文本模式先正常渲染部分结果到 stdout、再返回错误由 stderr 输出 `Error:`/`Hint:`；JSON 模式不渲染，把 `Result.Payload()` 挂到 `*output.Error.Data`，root 的 exitError 将其写入 failure envelope 的 `data`（ok:false + data + error）。
 
 ## 退出码与错误码
 

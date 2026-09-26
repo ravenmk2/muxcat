@@ -37,10 +37,14 @@ const (
 )
 
 // Error is a structured command error with an error code and optional hint.
+// Data optionally carries a partial result payload (degraded results: a
+// command that produced partial data and still fails); it is a carrier
+// only and is never serialized by Error itself.
 type Error struct {
 	Code    string
 	Message string
 	Hint    string
+	Data    any
 }
 
 func (e *Error) Error() string { return e.Message }
@@ -48,6 +52,13 @@ func (e *Error) Error() string { return e.Message }
 // NewError constructs a structured error. hint may be empty.
 func NewError(code, message, hint string) *Error {
 	return &Error{Code: code, Message: message, Hint: hint}
+}
+
+// WithData attaches a partial result payload and returns the error, for
+// chaining.
+func (e *Error) WithData(data any) *Error {
+	e.Data = data
+	return e
 }
 
 // ToError normalizes any error into *Error: passes through existing

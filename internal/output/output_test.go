@@ -603,3 +603,43 @@ func TestTableTruncationColored(t *testing.T) {
 		t.Fatalf("truncated cell should carry …:\n%s", out)
 	}
 }
+
+// TestErrorWithData covers the degraded-result carrier: WithData attaches
+// a payload, ToError passes *Error through with Data intact, and wrapping
+// a generic error yields no Data.
+func TestErrorWithData(t *testing.T) {
+	e := NewError(CodeConnectFailed, "boom", "hint").WithData(map[string]any{"rows": 1})
+	if e.Data == nil {
+		t.Fatal("WithData should attach the payload")
+	}
+	got := ToError(e)
+	if got != e || got.Data == nil {
+		t.Fatalf("ToError should pass through with Data intact: %+v", got)
+	}
+	if got := ToError(errors.New("plain")); got.Data != nil {
+		t.Fatalf("wrapped generic error should have no Data: %+v", got)
+	}
+}
+
+// TestFailureEnvelopeWithData verifies a failure envelope can carry a
+// partial result payload (degraded results).
+func TestFailureEnvelopeWithData(t *testing.T) {
+	e := NewError(CodeConnectFailed, "1 of 2 endpoints failed", "")
+	env := Failure(e, Meta{})
+	env.Data = map[string]any{"columns": []string{"endpoint"}, "rows": [][]any{{"a", "err"}}}
+	var buf bytes.Buffer
+	if err := WriteEnvelope(&buf, env); err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["ok"] != false {
+		t.Fatalf("ok = %v, want false", decoded["ok"])
+	}
+	data, ok := decoded["data"].(map[string]any)
+	if !ok || data["columns"] == nil {
+		t.Fatalf("envelope should carry the partial data: %s", buf.String())
+	}
+}
