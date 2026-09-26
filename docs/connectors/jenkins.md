@@ -52,6 +52,7 @@ API 核对的权威来源：Jenkins 实例自身的 `/api/` 文档入口 + 官�
 - `job ls` 对 folder（含 multibranch，`_class` 匹配）按 fullName 递归拉取，最大递归深度 10（防失控）。
 - `class` 列把 Java 类名简化为 `folder` / `workflow-job` / `freestyle` / `multibranch` / `matrix` 等；`status` 列映射 color 球：`blue→success`、`red→failed`、`yellow→unstable`、`aborted/disabled/not_built`，`_anime` 后缀统一为 `building`。
 - **参数默认值脱敏**：`type` 含 `Password` 的参数默认值显示为 `***`（空值保持空，保留"是否已设置"的可判断性）；`--json` 同样脱敏（不回传服务端原值）。
+- `conn show` / `job show` / `build show` 的 `key: value` 文本输出在 TTY 彩色开启时按 YAML 语法高亮（`Result.Syntax = "yaml"`）；`--json`、非 TTY、`NO_COLOR`/`--no-color` 下自动退化为无高亮原文。
 
 ### build 组
 

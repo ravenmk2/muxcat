@@ -136,6 +136,7 @@ func newBuildShowCmd() *cobra.Command {
 			return cli.RenderResult(cmd, &output.Result{
 				Value:    textValue(value),
 				JSONData: value,
+				Syntax:   "yaml",
 			}, meta(name, start, false))
 		},
 	}

@@ -259,7 +259,7 @@ func newConnShowCmd() *cobra.Command {
 				"readonly": conn.Readonly,
 				"timeout":  conn.Timeout,
 				"default":  name == cfg.DefaultConnection,
-			}}, meta(name, start, false))
+			}, Syntax: "yaml"}, meta(name, start, false))
 		},
 	}
 }
