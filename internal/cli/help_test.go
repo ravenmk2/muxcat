@@ -104,14 +104,14 @@ func TestFlagTokenRegex(t *testing.T) {
 }
 
 // TestHelpConvention enforces the help-information convention (see
-// docs/architecture.md): every command has a Short, every command group
-// has a Long, and every runnable leaf has an Example (or a Long covering
-// the same ground). Help topics are non-runnable and exempt. Connectors
-// still pending the rollout are skipped until their phase lands.
+// docs/architecture.md) on the framework tree: every command has a
+// Short, every command group has a Long, and every runnable leaf has an
+// Example (or a Long covering the same ground). Help topics are
+// non-runnable and exempt. This package does not import the connector
+// implementations, so the tree here holds cli's own commands only; the
+// full tree including connectors is checked by the same convention in
+// cmd/muxcat's TestHelpConvention.
 func TestHelpConvention(t *testing.T) {
-	pendingConnectors := map[string]bool{
-		"sqlite": true,
-	}
 	var check func(c *cobra.Command)
 	check = func(c *cobra.Command) {
 		if c.Short == "" {
@@ -133,12 +133,6 @@ func TestHelpConvention(t *testing.T) {
 	}
 	root := NewRoot("test")
 	check(root)
-	for _, c := range root.Commands() {
-		if pendingConnectors[c.Name()] {
-			continue
-		}
-		check(c)
-	}
 }
 
 // The help topics are reachable through `muxcat help <topic>` and appear

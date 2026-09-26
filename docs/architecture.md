@@ -65,7 +65,7 @@ muxcat 是一个面向基础设施后端的统一命令行客户端：以内置 
 - **connector / 命令组 Long**：2-4 行简介 + 首连 quickstart + 该层特有规则（如 redis 的拦截策略）。
 - **leaf 命令**：`Example` 必填（1-4 条完整调用，不带 `$` 提示符，可用 `#` 注释行）；语义不直观的命令再补 `Long`（如 redis scan 的单轮模式、exec 的拦截与透传）。
 - 写作原则：help 写用法、docs 写设计，互不复制；help 文本统一英文。
-- 强制：`internal/cli` 的规约测试遍历命令树——每个命令 `Short` 非空、命令组 `Long` 非空、runnable leaf 有 `Example` 或 `Long`；新增命令漏写即测试失败。
+- 强制：规约测试遍历命令树——每个命令 `Short` 非空、命令组 `Long` 非空、runnable leaf 有 `Example` 或 `Long`；新增命令漏写即测试失败。全量树（含全部 connector）的检查在 `cmd/muxcat` 的测试里（connector 经 main.go blank import 注册，测试内含 connector 挂载断言防空转）；`internal/cli` 的同名检查覆盖框架树。
 
 
 ## 目录结构与模块职责

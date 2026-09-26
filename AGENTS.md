@@ -29,7 +29,7 @@ muxcat/
 
 ## 帮助信息约定
 
-**新增或修改命令时必须同步帮助信息**（详见 docs/architecture.md「帮助信息约定」）：每个命令 `Short` 非空；命令组要有 `Long`（简介 + quickstart）;runnable leaf 必须有 `Example`（1-4 条完整调用）；语义不直观再补 `Long`。`internal/cli` 的命令树规约测试会强制此约定，漏写即失败。
+**新增或修改命令时必须同步帮助信息**（详见 docs/architecture.md「帮助信息约定」）：每个命令 `Short` 非空；命令组要有 `Long`（简介 + quickstart）;runnable leaf 必须有 `Example`（1-4 条完整调用）；语义不直观再补 `Long`。命令树规约测试（`cmd/muxcat` 覆盖含全部 connector 的全量树，`internal/cli` 覆盖框架树）会强制此约定，漏写即失败。
 
 ## 安全规范
 
