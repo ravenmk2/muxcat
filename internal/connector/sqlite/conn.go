@@ -19,6 +19,10 @@ func newConnCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "conn",
 		Short: "Manage sqlite connections",
+		Long: `Manage sqlite connections. conn add creates a same-named instance
+(database file path) and connection (readonly policy) in one
+step. The default connection is used when -c/--conn is not
+passed.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -39,6 +43,9 @@ func newConnAddCmd() *cobra.Command {
 		Use:   "add <name>",
 		Short: "Add a connection (creates an instance of the same name)",
 		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat sqlite conn add local --path ./app.db --set-default
+  muxcat sqlite conn add shared --path ~/data/team.db
+  muxcat sqlite conn add ro --path ./app.db --readonly`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -114,6 +121,8 @@ func newConnLsCmd() *cobra.Command {
 		Use:   "ls",
 		Short: "List all connections",
 		Args:  cobra.NoArgs,
+		Example: `  muxcat sqlite conn ls
+  muxcat sqlite conn ls --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -148,6 +157,8 @@ func newConnShowCmd() *cobra.Command {
 		Use:   "show <name>",
 		Short: "Show connection details",
 		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat sqlite conn show local
+  muxcat sqlite conn show local --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -177,9 +188,10 @@ func newConnShowCmd() *cobra.Command {
 
 func newConnRmCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "rm <name>",
-		Short: "Remove a connection (its instance is removed too when unreferenced)",
-		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Use:     "rm <name>",
+		Short:   "Remove a connection (its instance is removed too when unreferenced)",
+		Args:    cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat sqlite conn rm ro --yes`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -240,9 +252,10 @@ func newConnRmCmd() *cobra.Command {
 
 func newConnDefaultCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "default <name>",
-		Short: "Set the default connection",
-		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Use:     "default <name>",
+		Short:   "Set the default connection",
+		Args:    cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat sqlite conn default local`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -269,6 +282,8 @@ func newConnTestCmd() *cobra.Command {
 		Use:   "test <name>",
 		Short: "Test a connection (open + SELECT 1) and report latency",
 		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat sqlite conn test local
+  muxcat sqlite conn test ro --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()

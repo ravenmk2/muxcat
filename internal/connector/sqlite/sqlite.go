@@ -26,6 +26,20 @@ func New() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "sqlite",
 		Short: "SQLite connector",
+		Long: `SQLite connector for local database files. CGO builds use
+mattn/go-sqlite3, pure-Go builds use modernc.org/sqlite; the
+switch is automatic.
+
+Quickstart:
+  1. muxcat sqlite conn add local --path ./app.db --set-default
+  2. muxcat sqlite tables
+  3. muxcat sqlite query "SELECT * FROM users LIMIT 5"
+
+A connection points at a database file (the path supports ~
+expansion) and carries usage policies: a readonly connection
+opens the file with mode=ro, so SQLite itself rejects writes.
+Every invocation opens the file fresh; statements are
+single-shot (no multi-statement scripts, no transactions).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},

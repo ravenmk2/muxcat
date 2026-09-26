@@ -53,7 +53,20 @@ func newQueryCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   `query "SQL"`,
 		Short: "Execute SQL (SELECT-like statements return a result set, others report rows_affected)",
-		Args:  cli.ExactArgs(1, `"SQL"`, "sql"),
+		Long: `Execute one SQL statement. A statement leading with
+SELECT/PRAGMA/WITH/EXPLAIN/VALUES/TABLE returns a result set;
+anything else runs via Exec and reports rows_affected (known
+limitation: INSERT ... RETURNING takes the Exec path).
+
+Result sets are capped by --limit (meta.truncated reports an
+early stop; --limit 0 disables the cap). NULL renders as NULL,
+BLOB columns as 0x hex. On a readonly connection (mode=ro)
+writes are rejected by SQLite as READONLY_VIOLATION.`,
+		Args: cli.ExactArgs(1, `"SQL"`, "sql"),
+		Example: `  muxcat sqlite query "SELECT id, email FROM users LIMIT 5"
+  muxcat sqlite query "PRAGMA table_info(users)"
+  muxcat sqlite query "UPDATE users SET active = 1 WHERE id = 42"
+  muxcat sqlite query "SELECT * FROM logs" -c ro --limit 100 --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
@@ -181,6 +194,8 @@ func newTablesCmd() *cobra.Command {
 		Use:   "tables",
 		Short: "List tables and views in the database",
 		Args:  cobra.NoArgs,
+		Example: `  muxcat sqlite tables
+  muxcat sqlite tables -c ro --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
@@ -227,6 +242,9 @@ func newSchemaCmd() *cobra.Command {
 		Use:   "schema [table]",
 		Short: "Print DDL: the whole database without arguments, a single table otherwise",
 		Args:  cobra.MaximumNArgs(1),
+		Example: `  muxcat sqlite schema
+  muxcat sqlite schema users
+  muxcat sqlite schema users --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
