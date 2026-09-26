@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ravenmk2/muxcat/schema/etcd.schema.json",
+  "title": "etcd connector config (etcd.json)",
+  "allOf": [
+    { "$ref": "connector-common.schema.json#/$defs/connectorDoc" }
+  ],
+  "properties": {
+    "instances": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/etcdInstance" }
+    },
+    "connections": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/etcdConnection" }
+    }
+  },
+  "$defs": {
+    "etcdInstance": {
+      "type": "object",
+      "required": ["endpoints"],
+      "properties": {
+        "endpoints": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1
+        },
+        "tls": { "type": "boolean" },
+        "cacert": { "type": "string" },
+        "cert": { "type": "string" },
+        "key": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "etcdConnection": {
+      "type": "object",
+      "required": ["instance"],
+      "properties": {
+        "instance": { "type": "string", "minLength": 1 },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "readonly": { "type": "boolean" },
+        "allowDangerous": { "type": "boolean" },
+        "timeout": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

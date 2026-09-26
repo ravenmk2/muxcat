@@ -21,7 +21,7 @@ muxcat 是一个面向基础设施后端的统一命令行客户端：用同一�
 | Redis | ✅ |
 | MySQL | ✅ |
 | Postgres | 📋 |
-| etcd | 📋 |
+| etcd | ✅ |
 | MongoDB | 📋 |
 | ElasticSearch | 📋 |
 | OpenObserve | ✅ |

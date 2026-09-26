@@ -81,6 +81,7 @@ muxcat/
 │   ├── upgrade/           # 自更新：GitHub release 查询、带重试下载、checksum 校验、自替换（见 docs/upgrade.md）
 │   └── connector/
 │       ├── registry.go    # connector 注册表
+│       ├── etcd/          # etcd connector（见 docs/connectors/etcd.md）
 │       ├── mysql/         # MySQL connector（见 docs/connectors/mysql.md）
 │       ├── openobserve/   # OpenObserve connector（见 docs/connectors/openobserve.md）
 │       ├── redis/         # Redis connector（见 docs/connectors/redis.md）
