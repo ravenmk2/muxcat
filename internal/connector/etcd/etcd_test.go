@@ -487,3 +487,55 @@ func TestWatchFlagValidation(t *testing.T) {
 		t.Fatalf("put --lease-id -1: err=%v", err)
 	}
 }
+
+// TestAlarmDisarmGuardedWithoutServer verifies alarm disarm counts as a
+// write: a readonly connection is intercepted before any network access.
+func TestAlarmDisarmGuardedWithoutServer(t *testing.T) {
+	setupEnv(t)
+	addConn(t, "ro", "--endpoints", "127.0.0.1:1", "--readonly", "--set-default")
+	_, err := runMuxcat(t, "etcd", "alarm", "disarm")
+	if err == nil || output.ToError(err).Code != output.CodeReadonlyViolation {
+		t.Fatalf("alarm disarm on readonly conn: err=%v", err)
+	}
+	// allowDangerous is not required: a writable connection passes the guard
+	// and fails at dial instead.
+	addConn(t, "rw", "--endpoints", "127.0.0.1:1", "--timeout", "2s")
+	_, err = runMuxcat(t, "etcd", "alarm", "disarm", "-c", "rw")
+	if err == nil {
+		t.Fatal("alarm disarm against a closed port should fail at dial")
+	}
+	e := output.ToError(err)
+	if e.Code == output.CodeReadonlyViolation || e.Code == output.CodeUnsupportedOperation {
+		t.Fatalf("guard should not fire on a writable conn, got %s", e.Code)
+	}
+	if e.Code != output.CodeConnectFailed && e.Code != output.CodeTimeout {
+		t.Fatalf("code = %s, want CONNECT_FAILED or TIMEOUT (msg: %s)", e.Code, e.Message)
+	}
+}
+
+// TestClusterCommandsUnreachable checks the cluster-inspection commands
+// against a closed port: endpoint status/health fail only when every
+// endpoint fails; member list / alarm list surface classifyErr directly.
+func TestClusterCommandsUnreachable(t *testing.T) {
+	setupEnv(t)
+	addConn(t, "down", "--endpoints", "127.0.0.1:1", "--timeout", "2s", "--set-default")
+	for _, args := range [][]string{
+		{"etcd", "endpoint", "status"},
+		{"etcd", "endpoint", "health"},
+		{"etcd", "member", "list"},
+		{"etcd", "alarm", "list"},
+		{"etcd", "alarm", "disarm"},
+	} {
+		_, err := runMuxcat(t, args...)
+		if err == nil {
+			t.Fatalf("%v: should fail against a closed port", args)
+		}
+		e := output.ToError(err)
+		if e.Code != output.CodeConnectFailed && e.Code != output.CodeTimeout {
+			t.Fatalf("%v: code = %s, want CONNECT_FAILED or TIMEOUT (msg: %s)", args, e.Code, e.Message)
+		}
+		if output.ExitCode(err) != output.ExitConnect {
+			t.Fatalf("%v: exit = %d, want %d", args, output.ExitCode(err), output.ExitConnect)
+		}
+	}
+}

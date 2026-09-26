@@ -1,8 +1,9 @@
 // Package etcd implements muxcat's etcd connector (v3 API only), backed
-// by the pure-Go go.etcd.io/etcd/client/v3 driver (gRPC). Scope of the
-// first iteration: KV basics (get/put/del) and bounded watch. Lease
-// management, cluster maintenance (member/alarm/defrag) and auth
-// management are out of scope; the structure leaves room for them.
+// by the pure-Go go.etcd.io/etcd/client/v3 driver (gRPC). Scope: KV
+// basics (get/put/del), bounded watch, and cluster inspection (endpoint
+// status/health, member list, alarm list/disarm). Lease management,
+// compact/defrag and auth management are out of scope; the structure
+// leaves room for them.
 package etcd
 
 import (
@@ -43,9 +44,10 @@ func New() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "etcd",
 		Short: "etcd connector",
-		Long: `etcd connector (v3 API only). Scope: KV basics (get/put/del) and
-bounded watch. Lease management, cluster maintenance (member/alarm/
-defrag) and auth management are out of scope.
+		Long: `etcd connector (v3 API only). Scope: KV basics (get/put/del),
+bounded watch, and cluster inspection (endpoint status/health,
+member list, alarm list/disarm). Lease management, compact/defrag
+and auth management are out of scope.
 
 Quickstart:
   1. muxcat etcd conn add local --endpoints 127.0.0.1:2379 --set-default
@@ -65,6 +67,9 @@ usage policies: readonly allows reads only, and dangerous operations
 		newPutCmd(),
 		newDelCmd(),
 		newWatchCmd(),
+		newEndpointCmd(),
+		newMemberCmd(),
+		newAlarmCmd(),
 	)
 	return c
 }
