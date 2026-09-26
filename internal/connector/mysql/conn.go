@@ -21,6 +21,11 @@ func newConnCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "conn",
 		Short: "Manage mysql connections",
+		Long: `Manage mysql connections. conn add creates a same-named instance
+(endpoint: host, port, tls) and connection (credentials, default
+database, policies) in one step. Passwords are stored encrypted and
+never echoed by ls/show. The default connection is used when
+-c/--conn is not passed.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -41,6 +46,9 @@ func newConnAddCmd() *cobra.Command {
 		Use:   "add <name>",
 		Short: "Add a connection (creates an instance of the same name)",
 		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat mysql conn add local --host 127.0.0.1 --username root --set-default
+  muxcat mysql conn add prod --host db.internal --username app --password s3cret --database shop --tls --set-default
+  muxcat mysql conn add ro --host db.internal --username app --database shop --readonly`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -230,6 +238,8 @@ func newConnLsCmd() *cobra.Command {
 		Use:   "ls",
 		Short: "List all connections",
 		Args:  cobra.NoArgs,
+		Example: `  muxcat mysql conn ls
+  muxcat mysql conn ls --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -268,6 +278,8 @@ func newConnShowCmd() *cobra.Command {
 		Use:   "show <name>",
 		Short: "Show connection details (the password is never echoed)",
 		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat mysql conn show local
+  muxcat mysql conn show local --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -301,9 +313,10 @@ func newConnShowCmd() *cobra.Command {
 
 func newConnRmCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "rm <name>",
-		Short: "Remove a connection (its instance is removed too when unreferenced)",
-		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Use:     "rm <name>",
+		Short:   "Remove a connection (its instance is removed too when unreferenced)",
+		Args:    cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat mysql conn rm ro --yes`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -364,9 +377,10 @@ func newConnRmCmd() *cobra.Command {
 
 func newConnDefaultCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "default <name>",
-		Short: "Set the default connection",
-		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Use:     "default <name>",
+		Short:   "Set the default connection",
+		Args:    cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat mysql conn default prod`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()
@@ -393,6 +407,8 @@ func newConnTestCmd() *cobra.Command {
 		Use:   "test <name>",
 		Short: "Test a connection (PING + SELECT VERSION()) and report latency",
 		Args:  cli.ExactArgs(1, "<name>", "name"),
+		Example: `  muxcat mysql conn test local
+  muxcat mysql conn test prod --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, err := loadConfig()

@@ -151,6 +151,8 @@ func newDatabasesCmd() *cobra.Command {
 		Use:   "databases",
 		Short: "List databases on the server",
 		Args:  cobra.NoArgs,
+		Example: `  muxcat mysql databases
+  muxcat mysql databases --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withDB(cmd, func(ctx context.Context, db *sql.DB, name string, start time.Time) error {
 				names, err := queryStrings(ctx, db, "SHOW DATABASES")
@@ -176,7 +178,14 @@ func newStatusCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "status",
 		Short: "Show server status metrics (curated by default, --all dumps everything)",
-		Args:  cobra.NoArgs,
+		Long: `Show server status. The default prints a curated, fixed-order metric
+set (version, uptime, qps, threads, connections, slow queries, InnoDB
+buffer pool hit rate, ...) derived from SHOW GLOBAL STATUS plus a few
+variables; --all dumps the full SHOW GLOBAL STATUS, sorted by name.`,
+		Args: cobra.NoArgs,
+		Example: `  muxcat mysql status
+  muxcat mysql status --all --limit 50
+  muxcat mysql status --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withDB(cmd, func(ctx context.Context, db *sql.DB, name string, start time.Time) error {
 				status, err := showPairs(ctx, db, "SHOW GLOBAL STATUS")
@@ -304,7 +313,13 @@ func newVariablesCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "variables [pattern]",
 		Short: "Show server variables, optionally filtered by a case-insensitive substring",
-		Args:  cobra.MaximumNArgs(1),
+		Long: `Show server variables (SHOW GLOBAL VARIABLES; --session switches to
+session variables). [pattern] is a client-side case-insensitive
+substring filter, not a LIKE pattern.`,
+		Args: cobra.MaximumNArgs(1),
+		Example: `  muxcat mysql variables max_connections
+  muxcat mysql variables innodb_buffer --session
+  muxcat mysql variables --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withDB(cmd, func(ctx context.Context, db *sql.DB, name string, start time.Time) error {
 				query := "SHOW GLOBAL VARIABLES"
@@ -375,6 +390,8 @@ func newProcesslistCmd() *cobra.Command {
 		Use:   "processlist",
 		Short: "Show the full process list",
 		Args:  cobra.NoArgs,
+		Example: `  muxcat mysql processlist
+  muxcat mysql processlist --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withDB(cmd, func(ctx context.Context, db *sql.DB, name string, start time.Time) error {
 				ps, err := queryProcesses(ctx, db)
@@ -406,7 +423,12 @@ func newKillCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "kill <id>",
 		Short: "Kill a connection from the process list",
-		Args:  cli.ExactArgs(1, "<id>", "id"),
+		Long: `Kill a connection by its process id (see processlist). On a TTY the
+target is shown before a confirmation prompt; off a TTY --yes is
+required. Not allowed on a readonly connection. Killing another
+account's connection requires the CONNECTION_ADMIN privilege.`,
+		Args:    cli.ExactArgs(1, "<id>", "id"),
+		Example: `  muxcat mysql kill 1234 --yes`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
@@ -502,6 +524,8 @@ func newUsersCmd() *cobra.Command {
 		Use:   "users",
 		Short: "List server accounts from mysql.user",
 		Args:  cobra.NoArgs,
+		Example: `  muxcat mysql users
+  muxcat mysql users --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withDB(cmd, func(ctx context.Context, db *sql.DB, name string, start time.Time) error {
 				rs, err := db.QueryContext(ctx,
@@ -535,6 +559,9 @@ func newGrantsCmd() *cobra.Command {
 		Use:   "grants [user@host]",
 		Short: "Show grants for the current account or a given user@host",
 		Args:  cobra.MaximumNArgs(1),
+		Example: `  muxcat mysql grants                    # current account
+  muxcat mysql grants 'app'@'%'
+  muxcat mysql grants root@localhost --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			query := "SHOW GRANTS"
 			if len(args) == 1 {
@@ -582,6 +609,8 @@ func newEngineCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "engine",
 		Short: "Storage engine inspection",
+		Long: `Storage engine inspection. Currently covers InnoDB only: engine
+innodb status prints the InnoDB monitor report.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -594,6 +623,9 @@ func newEngineInnodbCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "innodb",
 		Short: "InnoDB inspection",
+		Long: `InnoDB inspection: the engine status monitor report (SHOW ENGINE
+INNODB STATUS) with its transaction, deadlock, and buffer pool
+sections.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -607,6 +639,8 @@ func newEngineInnodbStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Print the InnoDB monitor report (SHOW ENGINE INNODB STATUS)",
 		Args:  cobra.NoArgs,
+		Example: `  muxcat mysql engine innodb status
+  muxcat mysql engine innodb status --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withDB(cmd, func(ctx context.Context, db *sql.DB, name string, start time.Time) error {
 				var typ, engineName, status string
@@ -627,7 +661,13 @@ func newReplicationCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "replication",
 		Short: "Show replica status (curated fields, 8.0 naming)",
-		Args:  cobra.NoArgs,
+		Long: `Show replica status as curated fields with MySQL 8.0 naming (on 5.7
+the Master_*/Slave_* columns are mapped automatically). A server that
+is not replicating reports "not a replica". GTID sets are truncated
+in text output; JSON keeps the full values.`,
+		Args: cobra.NoArgs,
+		Example: `  muxcat mysql replication
+  muxcat mysql replication --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withDB(cmd, func(ctx context.Context, db *sql.DB, name string, start time.Time) error {
 				row, ok, err := queryRowMap(ctx, db, "SHOW REPLICA STATUS")

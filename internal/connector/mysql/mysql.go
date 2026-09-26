@@ -35,6 +35,20 @@ func New() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "mysql",
 		Short: "MySQL connector",
+		Long: `MySQL connector for MySQL 5.7+ / 8.x (MariaDB works too), backed
+by the pure-Go go-sql-driver/mysql driver.
+
+Quickstart:
+  1. muxcat mysql conn add local --host 127.0.0.1 --username root --set-default
+  2. muxcat mysql query "SELECT VERSION()"
+  3. muxcat mysql tables
+
+A connection carries credentials (encrypted at rest, never echoed), an
+optional default database, and usage policies: a readonly connection
+passes read statements only (a client-side guard plus a server-side
+read-only session), and execute/kill are refused on it. Every
+invocation opens its own connection; statements are single-shot (no
+multi-statement scripts, no transactions).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},

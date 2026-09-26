@@ -110,7 +110,6 @@ func TestFlagTokenRegex(t *testing.T) {
 // still pending the rollout are skipped until their phase lands.
 func TestHelpConvention(t *testing.T) {
 	pendingConnectors := map[string]bool{
-		"mysql":       true,
 		"openobserve": true,
 		"sqlite":      true,
 	}

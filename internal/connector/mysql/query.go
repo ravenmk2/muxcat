@@ -100,7 +100,21 @@ func newQueryCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   `query ["SQL"]`,
 		Short: "Execute SQL (SELECT-like statements return a result set, others report rows_affected)",
-		Args:  cobra.MaximumNArgs(1),
+		Long: `Execute one SQL statement. The statement comes from the positional
+argument, --file <path>, --file - (stdin), or a piped stdin. A
+statement leading with SELECT/SHOW/DESC/DESCRIBE/EXPLAIN/WITH/
+VALUES/TABLE returns a result set; anything else runs via Exec and
+reports rows_affected.
+
+Result sets are capped by --limit (meta.truncated reports an early
+stop); NULL renders as NULL, binary columns as 0x hex. On a readonly
+connection only read statements pass the client-side guard.
+Multi-statement scripts are not supported.`,
+		Args: cobra.MaximumNArgs(1),
+		Example: `  muxcat mysql query "SELECT id, email FROM users LIMIT 5"
+  muxcat mysql query "UPDATE users SET active = 1 WHERE id = 42"
+  muxcat mysql query --file report.sql --json
+  echo "SHOW TABLES" | muxcat mysql query --db analytics`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
@@ -146,7 +160,18 @@ func newExecuteCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   `execute ["SQL"]`,
 		Short: "Execute a statement unconditionally via Exec (result sets are discarded)",
-		Args:  cobra.MaximumNArgs(1),
+		Long: `Execute one statement unconditionally via Exec: even SELECT goes
+through Exec, the result set is discarded, and only rows_affected is
+reported. The input channels are the same as query (positional
+argument, --file <path>, --file -, piped stdin), and --db overrides
+the connection's database for this invocation.
+
+On a readonly connection execute is refused outright — SELECT
+included; use query for read-only statements.`,
+		Args: cobra.MaximumNArgs(1),
+		Example: `  muxcat mysql execute "INSERT INTO logs (msg) VALUES ('hello')"
+  muxcat mysql execute --file add_index.sql --db app
+  echo "TRUNCATE TABLE staging" | muxcat mysql execute`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
@@ -283,6 +308,8 @@ func newTablesCmd() *cobra.Command {
 		Use:   "tables",
 		Short: "List tables and views in the database",
 		Args:  cobra.NoArgs,
+		Example: `  muxcat mysql tables
+  muxcat mysql tables --db analytics --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
@@ -334,6 +361,9 @@ func newSchemaCmd() *cobra.Command {
 		Use:   "schema [table]",
 		Short: "Print DDL: all tables without arguments, a single table otherwise",
 		Args:  cobra.MaximumNArgs(1),
+		Example: `  muxcat mysql schema              # DDL of every table in the database
+  muxcat mysql schema users
+  muxcat mysql schema users --db analytics --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
