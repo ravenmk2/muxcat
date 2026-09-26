@@ -50,6 +50,14 @@ var dangerousCmds = map[string]bool{
 // boundary: Lua can bypass it; hard constraints need server-side ACLs.
 func guardCommand(conn Connection, name string, args ...any) error {
 	upper := strings.ToUpper(name)
+	if upper == "SELECT" {
+		// Every muxcat invocation opens its own connection, so a
+		// pass-through SELECT would silently not persist; --db is the
+		// supported mechanism. Blocked on every connection class.
+		return output.NewError(output.CodeUnsupportedOperation,
+			"SELECT is not supported: each invocation uses its own connection, so SELECT would not persist",
+			"use --db n to choose the logical database for an invocation")
+	}
 	if conn.Readonly && !isReadonly(upper, args) {
 		return output.NewError(output.CodeReadonlyViolation,
 			fmt.Sprintf("command %s is not allowed on a readonly connection", upper),

@@ -45,8 +45,30 @@ func replyResult(r reply, syntaxFlag string) *output.Result {
 	return res
 }
 
+// addDBFlag registers --db on a keyspace command: it overrides the
+// connection's logical database for a single invocation and is never
+// persisted. -1 marks "not set" so an explicit --db 0 works.
+func addDBFlag(c *cobra.Command) {
+	c.Flags().Int("db", -1, "logical database index for this invocation (overrides the connection's db)")
+}
+
+// applyDBFlag overrides the connection's db when --db was passed. Commands
+// without the flag registered (info, config get) report Changed=false.
+func applyDBFlag(cmd *cobra.Command, conn *Connection) error {
+	if !cmd.Flags().Changed("db") {
+		return nil
+	}
+	db, _ := cmd.Flags().GetInt("db")
+	if db < 0 {
+		return output.NewError(output.CodeMissingArgument,
+			fmt.Sprintf("invalid --db %d: must be >= 0", db), "")
+	}
+	conn.DB = &db
+	return nil
+}
+
 // resolveTarget loads the config and resolves a connection from
-// -c/--conn (falling back to defaultConnection).
+// -c/--conn (falling back to defaultConnection), applying the --db override.
 func resolveTarget(cmd *cobra.Command) (*Config, string, Connection, error) {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -54,6 +76,9 @@ func resolveTarget(cmd *cobra.Command) (*Config, string, Connection, error) {
 	}
 	name, conn, err := resolve(cfg, cli.FlagString(cmd, "conn"))
 	if err != nil {
+		return nil, "", Connection{}, err
+	}
+	if err := applyDBFlag(cmd, &conn); err != nil {
 		return nil, "", Connection{}, err
 	}
 	return cfg, name, conn, nil
@@ -138,11 +163,12 @@ func newExecCmd() *cobra.Command {
 				return classifyErr(err, "command failed")
 			}
 			r, truncated := renderReply(v, binary, maxBytes)
-			return cli.RenderResult(cmd, replyResult(r, highlightFlag(cmd)), meta(name, start, truncated))
+			return cli.RenderResult(cmd, replyResult(r, highlightFlag(cmd)), meta(cfg, conn, name, start, truncated))
 		},
 	}
 	addBinaryFlags(c)
 	addHighlightFlag(c)
+	addDBFlag(c)
 	// Negative args (e.g. exec ZRANGE board 0 -1) are common; flags must
 	// come before positional arguments, everything after is an argument.
 	c.Flags().SetInterspersed(false)
@@ -195,11 +221,12 @@ func newGetCmd() *cobra.Command {
 			if s, ok := value.(string); ok {
 				res.Syntax, _ = resolveSyntax(s, highlightFlag(cmd))
 			}
-			return cli.RenderResult(cmd, res, meta(name, start, truncated))
+			return cli.RenderResult(cmd, res, meta(cfg, conn, name, start, truncated))
 		},
 	}
 	addBinaryFlags(c)
 	addHighlightFlag(c)
+	addDBFlag(c)
 	return c
 }
 
@@ -283,18 +310,19 @@ func newSetCmd() *cobra.Command {
 			return cli.RenderResult(cmd, &output.Result{
 				Value: map[string]any{"value": out},
 				Bare:  true,
-			}, meta(name, start, false))
+			}, meta(cfg, conn, name, start, false))
 		},
 	}
 	c.Flags().Duration("ttl", 0, "expiration (e.g. 30s, 5m); 0 keeps the key persistent")
 	c.Flags().Bool("nx", false, "set only if the key does not exist")
 	c.Flags().Bool("xx", false, "set only if the key already exists")
 	c.Flags().String("file", "", "read the value from a file (binary-safe; - reads stdin)")
+	addDBFlag(c)
 	return c
 }
 
 func newDelCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:   "del <key> [key...]",
 		Short: "Delete keys; reports how many were removed",
 		Args:  atLeastArgs(1, "<key> [key...]", "key"),
@@ -321,21 +349,49 @@ func newDelCmd() *cobra.Command {
 			return cli.RenderResult(cmd, &output.Result{
 				Value: map[string]any{"deleted": n},
 				Bare:  true,
-			}, meta(name, start, false))
+			}, meta(cfg, conn, name, start, false))
 		},
 	}
+	addDBFlag(c)
+	return c
 }
 
-func newKeysCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "keys [pattern]",
-		Short: "List keys matching a pattern (SCAN-based; KEYS is never used)",
+// scanTypes are the valid values of SCAN's TYPE filter (Redis 6+).
+var scanTypes = map[string]bool{
+	"string": true, "list": true, "set": true,
+	"zset": true, "hash": true, "stream": true,
+}
+
+// classifyScanErr classifies a SCAN failure; with --type set, a server
+// syntax error points at the Redis 6.0 requirement of the TYPE filter.
+func classifyScanErr(err error, keyType string) *output.Error {
+	e := classifyErr(err, "scan failed")
+	if keyType != "" && strings.Contains(err.Error(), "syntax error") {
+		e.Hint = "SCAN TYPE requires Redis 6.0+; the server is older"
+	}
+	return e
+}
+
+func newScanCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "scan [pattern]",
+		Short: "Scan keys matching a pattern (SCAN-based; KEYS is never used)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			pattern := "*"
 			if len(args) == 1 {
 				pattern = args[0]
+			}
+			keyType := strings.ToLower(cli.FlagString(cmd, "type"))
+			if keyType != "" && !scanTypes[keyType] {
+				return output.NewError(output.CodeMissingArgument,
+					fmt.Sprintf("invalid --type %q (valid: string, list, set, zset, hash, stream)", keyType), "")
+			}
+			count, _ := cmd.Flags().GetInt64("count")
+			if count <= 0 {
+				return output.NewError(output.CodeMissingArgument,
+					"--count must be > 0", "")
 			}
 			cfg, name, conn, err := resolveTarget(cmd)
 			if err != nil {
@@ -351,6 +407,35 @@ func newKeysCmd() *cobra.Command {
 			defer cancel()
 			defer func() { _ = client.Close() }()
 
+			oneRound := func(cursor uint64) ([]string, uint64, error) {
+				if keyType != "" {
+					return client.ScanType(ctx, cursor, pattern, count, keyType).Result()
+				}
+				return client.Scan(ctx, cursor, pattern, count).Result()
+			}
+
+			// Single-round mode: one SCAN call from --cursor; the next
+			// cursor rides in meta (0 marks a completed iteration).
+			if cmd.Flags().Changed("cursor") {
+				cursor, _ := cmd.Flags().GetUint64("cursor")
+				batch, next, err := oneRound(cursor)
+				if err != nil {
+					return classifyScanErr(err, keyType)
+				}
+				rows := make([][]any, 0, len(batch))
+				for _, k := range batch {
+					rows = append(rows, []any{k})
+				}
+				var trunc bool
+				rows, trunc = applyLimit(rows, cli.FlagLimit(cmd))
+				m := meta(cfg, conn, name, start, trunc)
+				m.Cursor = &next
+				return cli.RenderResult(cmd, &output.Result{
+					Columns: []string{"key"},
+					Rows:    rows,
+				}, m)
+			}
+
 			limit := cli.FlagLimit(cmd)
 			rows := make([][]any, 0)
 			truncated := false
@@ -358,9 +443,9 @@ func newKeysCmd() *cobra.Command {
 		scan:
 			for {
 				var batch []string
-				batch, cursor, err = client.Scan(ctx, cursor, pattern, 100).Result()
+				batch, cursor, err = oneRound(cursor)
 				if err != nil {
-					return classifyErr(err, "scan failed")
+					return classifyScanErr(err, keyType)
 				}
 				for _, k := range batch {
 					if limit > 0 && len(rows) >= limit {
@@ -376,13 +461,18 @@ func newKeysCmd() *cobra.Command {
 			return cli.RenderResult(cmd, &output.Result{
 				Columns: []string{"key"},
 				Rows:    rows,
-			}, meta(name, start, truncated))
+			}, meta(cfg, conn, name, start, truncated))
 		},
 	}
+	c.Flags().String("type", "", "server-side TYPE filter: string, list, set, zset, hash, stream")
+	c.Flags().Int64("count", 100, "SCAN COUNT per batch (affects pacing, not the result set)")
+	c.Flags().Uint64("cursor", 0, "single-round mode: run one SCAN from this cursor; the next cursor is returned in meta")
+	addDBFlag(c)
+	return c
 }
 
 func newTypeCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:   "type <key>",
 		Short: "Report the type of a key (none when the key does not exist)",
 		Args:  cli.ExactArgs(1, "<key>", "key"),
@@ -409,9 +499,11 @@ func newTypeCmd() *cobra.Command {
 			return cli.RenderResult(cmd, &output.Result{
 				Value: map[string]any{"value": t},
 				Bare:  true,
-			}, meta(name, start, false))
+			}, meta(cfg, conn, name, start, false))
 		},
 	}
+	addDBFlag(c)
+	return c
 }
 
 func newTTLCmd() *cobra.Command {
@@ -463,10 +555,11 @@ func newTTLCmd() *cobra.Command {
 			return cli.RenderResult(cmd, &output.Result{
 				Value: map[string]any{"value": value},
 				Bare:  true,
-			}, meta(name, start, false))
+			}, meta(cfg, conn, name, start, false))
 		},
 	}
 	c.Flags().Bool("ms", false, "use PTTL (milliseconds) instead of TTL (seconds)")
+	addDBFlag(c)
 	return c
 }
 
@@ -532,13 +625,13 @@ func newInfoCmd() *cobra.Command {
 			}
 			return cli.RenderResult(cmd, &output.Result{
 				Value: parseInfo(text),
-			}, meta(name, start, false))
+			}, meta(cfg, conn, name, start, false))
 		},
 	}
 }
 
 func newDBSizeCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:   "dbsize",
 		Short: "Report the number of keys in the current database",
 		Args:  cobra.NoArgs,
@@ -565,9 +658,11 @@ func newDBSizeCmd() *cobra.Command {
 			return cli.RenderResult(cmd, &output.Result{
 				Value: map[string]any{"value": n},
 				Bare:  true,
-			}, meta(name, start, false))
+			}, meta(cfg, conn, name, start, false))
 		},
 	}
+	addDBFlag(c)
+	return c
 }
 
 func newHGetCmd() *cobra.Command {
@@ -609,10 +704,11 @@ func newHGetCmd() *cobra.Command {
 			return cli.RenderResult(cmd, &output.Result{
 				Value: map[string]any{"value": value},
 				Bare:  true,
-			}, meta(name, start, truncated))
+			}, meta(cfg, conn, name, start, truncated))
 		},
 	}
 	addBinaryFlags(c)
+	addDBFlag(c)
 	return c
 }
 
@@ -670,10 +766,11 @@ func newHGetAllCmd() *cobra.Command {
 			return cli.RenderResult(cmd, &output.Result{
 				Columns: []string{"field", "value"},
 				Rows:    rows,
-			}, meta(name, start, truncated || rowTrunc))
+			}, meta(cfg, conn, name, start, truncated || rowTrunc))
 		},
 	}
 	addBinaryFlags(c)
+	addDBFlag(c)
 	return c
 }
 
@@ -726,10 +823,11 @@ func newLRangeCmd() *cobra.Command {
 			return cli.RenderResult(cmd, &output.Result{
 				Columns: []string{"index", "value"},
 				Rows:    rows,
-			}, meta(name, start, truncated || rowTrunc))
+			}, meta(cfg, conn, name, start, truncated || rowTrunc))
 		},
 	}
 	addBinaryFlags(c)
+	addDBFlag(c)
 	// Negative ranges (lrange queue 0 -1) are the Redis idiom; flags must
 	// come before positional arguments, everything after is an argument.
 	c.Flags().SetInterspersed(false)
@@ -778,10 +876,11 @@ func newSMembersCmd() *cobra.Command {
 			return cli.RenderResult(cmd, &output.Result{
 				Columns: []string{"member"},
 				Rows:    rows,
-			}, meta(name, start, truncated || rowTrunc))
+			}, meta(cfg, conn, name, start, truncated || rowTrunc))
 		},
 	}
 	addBinaryFlags(c)
+	addDBFlag(c)
 	return c
 }
 
@@ -845,11 +944,12 @@ func newZRangeCmd() *cobra.Command {
 			return cli.RenderResult(cmd, &output.Result{
 				Columns: []string{"member", "score"},
 				Rows:    rows,
-			}, meta(name, start, truncated || rowTrunc))
+			}, meta(cfg, conn, name, start, truncated || rowTrunc))
 		},
 	}
 	c.Flags().Bool("rev", false, "reverse order (highest score first)")
 	addBinaryFlags(c)
+	addDBFlag(c)
 	// Negative ranges (zrange board 0 -1) are the Redis idiom; flags must
 	// come before positional arguments, everything after is an argument.
 	c.Flags().SetInterspersed(false)
@@ -918,7 +1018,7 @@ func newEvalCmd() *cobra.Command {
 				return classifyErr(err, "eval failed")
 			}
 			r, truncated := renderReply(v, binary, maxBytes)
-			return cli.RenderResult(cmd, replyResult(r, highlightFlag(cmd)), meta(name, start, truncated))
+			return cli.RenderResult(cmd, replyResult(r, highlightFlag(cmd)), meta(cfg, conn, name, start, truncated))
 		},
 	}
 	c.Flags().String("file", "", "read the script from a file (alternative to the script argument)")
@@ -926,6 +1026,7 @@ func newEvalCmd() *cobra.Command {
 	c.Flags().StringArray("arg", nil, "ARGV[] entry; repeatable, order preserved")
 	addBinaryFlags(c)
 	addHighlightFlag(c)
+	addDBFlag(c)
 	return c
 }
 
@@ -991,7 +1092,7 @@ func newConfigGetCmd() *cobra.Command {
 			return cli.RenderResult(cmd, &output.Result{
 				Columns: []string{"field", "value"},
 				Rows:    rows,
-			}, meta(name, start, truncated || rowTrunc))
+			}, meta(cfg, conn, name, start, truncated || rowTrunc))
 		},
 	}
 	addBinaryFlags(c)

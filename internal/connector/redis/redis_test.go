@@ -84,6 +84,9 @@ func TestGuardCommand(t *testing.T) {
 		{"dangerous CONFIG SET blocked", false, false, "CONFIG", []any{"SET", "maxmemory", "1gb"}, output.CodeUnsupportedOperation},
 		{"dangerous SHUTDOWN blocked", false, false, "SHUTDOWN", nil, output.CodeUnsupportedOperation},
 		{"dangerous SWAPDB blocked", false, false, "SWAPDB", nil, output.CodeUnsupportedOperation},
+		{"SELECT blocked on writable", false, false, "SELECT", []any{"3"}, output.CodeUnsupportedOperation},
+		{"SELECT blocked with allowDangerous", false, true, "SELECT", []any{"0"}, output.CodeUnsupportedOperation},
+		{"SELECT blocked on readonly", true, false, "SELECT", []any{"1"}, output.CodeUnsupportedOperation},
 		{"allowDangerous permits FLUSHALL", false, true, "FLUSHALL", nil, ""},
 		{"allowDangerous permits CONFIG SET", false, true, "CONFIG", []any{"SET"}, ""},
 		{"ordinary writes allowed when writable", false, false, "SET", nil, ""},
@@ -692,6 +695,138 @@ func TestHighlightFlagAlias(t *testing.T) {
 		if e := output.ToError(err); err == nil || e.Code != output.CodeMissingArgument {
 			t.Fatalf("%s bad: err=%v", flag, err)
 		}
+	}
+}
+
+// TestDBFlagOverride covers the per-invocation --db flag: a negative value
+// is rejected before dialing, an explicit value (including 0) overrides the
+// connection's db, and a valid flag reaches the dial stage (closed port →
+// CONNECT_FAILED).
+func TestDBFlagOverride(t *testing.T) {
+	setupEnv(t)
+	addConn(t, "down", "--port", "1", "--db", "2", "--timeout", "2s", "--set-default")
+
+	_, err := runMuxcat(t, "redis", "get", "k", "--db", "-1")
+	if e := output.ToError(err); err == nil || e.Code != output.CodeMissingArgument {
+		t.Fatalf("--db -1: err=%v", err)
+	}
+
+	_, err = runMuxcat(t, "redis", "get", "k", "--db", "5")
+	if e := output.ToError(err); err == nil || e.Code != output.CodeConnectFailed {
+		t.Fatalf("--db 5 should reach the dial stage: err=%v", err)
+	}
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := cfg.Connections["down"]
+	for _, tc := range []struct {
+		args   []string
+		wantDB int
+	}{
+		{[]string{}, 2}, // connection-level db
+		{[]string{"--db", "0"}, 0},
+		{[]string{"--db", "7"}, 7},
+	} {
+		cmd := newGetCmd()
+		if err := cmd.ParseFlags(tc.args); err != nil {
+			t.Fatal(err)
+		}
+		c := conn
+		if err := applyDBFlag(cmd, &c); err != nil {
+			t.Fatalf("%v: %v", tc.args, err)
+		}
+		inst := cfg.Instances[c.Instance]
+		if got := effectiveDB(inst, c); got != tc.wantDB {
+			t.Fatalf("%v: effective db = %d, want %d", tc.args, got, tc.wantDB)
+		}
+	}
+	// The stored config must not be mutated by the flag override.
+	if cfg.Connections["down"].DB == nil || *cfg.Connections["down"].DB != 2 {
+		t.Fatalf("connection db should stay 2, got %v", cfg.Connections["down"].DB)
+	}
+}
+
+// TestScanFlags covers scan's flag validation (all before dialing) and the
+// removal of the old keys command.
+func TestScanFlags(t *testing.T) {
+	setupEnv(t)
+	addConn(t, "down", "--port", "1", "--timeout", "2s", "--set-default")
+
+	_, err := runMuxcat(t, "redis", "scan", "--type", "bad")
+	if e := output.ToError(err); err == nil || e.Code != output.CodeMissingArgument {
+		t.Fatalf("--type bad: err=%v", err)
+	}
+	_, err = runMuxcat(t, "redis", "scan", "--count", "0")
+	if e := output.ToError(err); err == nil || e.Code != output.CodeMissingArgument {
+		t.Fatalf("--count 0: err=%v", err)
+	}
+	// Valid flags (full iteration and single-round mode) reach the dial
+	// stage against the closed port.
+	for _, args := range [][]string{
+		{"redis", "scan", "user:*", "--type", "hash", "--count", "50"},
+		{"redis", "scan", "--cursor", "0"},
+	} {
+		_, err := runMuxcat(t, args...)
+		if e := output.ToError(err); err == nil || e.Code != output.CodeConnectFailed {
+			t.Fatalf("%v: should reach the dial stage: err=%v", args, err)
+		}
+	}
+
+	out, err := runMuxcat(t, "redis", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "\n  scan ") || strings.Contains(out, "\n  keys ") {
+		t.Fatalf("redis help should list a scan command and no keys command: %q", out)
+	}
+}
+
+// TestMetaDB verifies the envelope meta carries the effective db on
+// single-connection commands and omits it on conn ls (no single connection).
+func TestMetaDB(t *testing.T) {
+	setupEnv(t)
+	addConn(t, "local", "--db", "2", "--set-default")
+
+	envelopeMeta := func(t *testing.T, args ...string) map[string]any {
+		t.Helper()
+		out, err := runMuxcat(t, append(args, "--json")...)
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		var env struct {
+			Meta map[string]any `json:"meta"`
+		}
+		if err := json.Unmarshal([]byte(out), &env); err != nil {
+			t.Fatalf("%v: bad envelope %q: %v", args, out, err)
+		}
+		return env.Meta
+	}
+
+	if db, ok := envelopeMeta(t, "redis", "conn", "show", "local")["db"].(float64); !ok || int(db) != 2 {
+		t.Fatalf("conn show meta.db = %v, want 2", db)
+	}
+	if _, ok := envelopeMeta(t, "redis", "conn", "ls")["db"]; ok {
+		t.Fatal("conn ls should omit meta.db")
+	}
+}
+
+func TestClassifyScanErr(t *testing.T) {
+	// A syntax error with --type set points at the Redis 6.0 requirement.
+	e := classifyScanErr(errors.New("ERR syntax error"), "hash")
+	if e.Code != output.CodeQueryError || !strings.Contains(e.Hint, "Redis 6.0") {
+		t.Fatalf("syntax error with --type: %+v", e)
+	}
+	// Without --type the hint stays empty.
+	e = classifyScanErr(errors.New("ERR syntax error"), "")
+	if e.Hint != "" {
+		t.Fatalf("syntax error without --type should have no hint: %+v", e)
+	}
+	// Non-syntax errors keep the standard classification.
+	e = classifyScanErr(errors.New("WRONGTYPE ..."), "hash")
+	if e.Hint != "" {
+		t.Fatalf("non-syntax error should have no hint: %+v", e)
 	}
 }
 

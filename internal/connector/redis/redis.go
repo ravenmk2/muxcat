@@ -51,7 +51,7 @@ func New() *cobra.Command {
 		newGetCmd(),
 		newSetCmd(),
 		newDelCmd(),
-		newKeysCmd(),
+		newScanCmd(),
 		newTypeCmd(),
 		newTTLCmd(),
 		newInfoCmd(),
@@ -67,14 +67,22 @@ func New() *cobra.Command {
 	return c
 }
 
-// meta builds the envelope meta for redis commands.
-func meta(connName string, start time.Time, truncated bool) output.Meta {
-	return output.Meta{
+// meta builds the envelope meta for redis commands, reporting the effective
+// logical database (after --db override and legacy fallbacks) when the
+// connection's instance resolves; conn-management commands that have no
+// single instance in scope (conn ls) omit the db field.
+func meta(cfg *Config, conn Connection, connName string, start time.Time, truncated bool) output.Meta {
+	m := output.Meta{
 		Connector:  "redis",
 		Connection: connName,
 		ElapsedMS:  time.Since(start).Milliseconds(),
 		Truncated:  truncated,
 	}
+	if inst, err := cfg.instanceOf(conn); err == nil {
+		db := effectiveDB(inst, conn)
+		m.DB = &db
+	}
+	return m
 }
 
 // clientOptions builds go-redis options from an instance + connection,

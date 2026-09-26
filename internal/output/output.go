@@ -78,12 +78,17 @@ func ExitCode(err error) int {
 	}
 }
 
-// Meta is the envelope meta field, filled in by commands.
+// Meta is the envelope meta field, filled in by commands. DB and Cursor are
+// connector-specific extras (redis): DB reports the effective logical
+// database, Cursor the next SCAN cursor in single-round mode. Pointers keep
+// them out of envelopes that do not set them (db 0 is meaningful).
 type Meta struct {
-	Connector  string `json:"connector"`
-	Connection string `json:"connection"`
-	ElapsedMS  int64  `json:"elapsed_ms"`
-	Truncated  bool   `json:"truncated"`
+	Connector  string  `json:"connector"`
+	Connection string  `json:"connection"`
+	ElapsedMS  int64   `json:"elapsed_ms"`
+	Truncated  bool    `json:"truncated"`
+	DB         *int    `json:"db,omitempty"`
+	Cursor     *uint64 `json:"cursor,omitempty"`
 }
 
 // ErrorBody is the envelope error field.
@@ -94,7 +99,7 @@ type ErrorBody struct {
 }
 
 // Envelope is muxcat's fixed output shape:
-// {ok, data, meta:{connector, connection, elapsed_ms, truncated}, error:{code, message, hint?}}
+// {ok, data, meta:{connector, connection, elapsed_ms, truncated, db?, cursor?}, error:{code, message, hint?}}
 type Envelope struct {
 	OK    bool       `json:"ok"`
 	Data  any        `json:"data,omitempty"`

@@ -162,7 +162,7 @@ func newConnAddCmd() *cobra.Command {
 			}
 			return cli.RenderResult(cmd, &output.Result{
 				Message: fmt.Sprintf("added connection %s (%s:%d, db %d)", name, host, port, db),
-			}, meta(name, start, false))
+			}, meta(cfg, conn, name, start, false))
 		},
 	}
 	c.Flags().String("host", "", "server host")
@@ -273,7 +273,7 @@ func newConnLsCmd() *cobra.Command {
 			return cli.RenderResult(cmd, &output.Result{
 				Columns: []string{"name", "addr", "user", "db", "tls", "readonly", "default"},
 				Rows:    rows,
-			}, meta("", start, false))
+			}, meta(cfg, Connection{}, "", start, false))
 		},
 	}
 }
@@ -310,7 +310,7 @@ func newConnShowCmd() *cobra.Command {
 				"allowDangerous": conn.AllowDangerous,
 				"timeout":        conn.Timeout,
 				"default":        name == cfg.DefaultConnection,
-			}}, meta(name, start, false))
+			}}, meta(cfg, conn, name, start, false))
 		},
 	}
 }
@@ -373,7 +373,7 @@ func newConnRmCmd() *cobra.Command {
 			}
 			return cli.RenderResult(cmd, &output.Result{
 				Message: "removed connection " + name,
-			}, meta(name, start, false))
+			}, meta(cfg, conn, name, start, false))
 		},
 	}
 }
@@ -399,7 +399,7 @@ func newConnDefaultCmd() *cobra.Command {
 			}
 			return cli.RenderResult(cmd, &output.Result{
 				Message: "default connection set to " + name,
-			}, meta(name, start, false))
+			}, meta(cfg, cfg.Connections[name], name, start, false))
 		},
 	}
 }
@@ -452,7 +452,7 @@ func newConnTestCmd() *cobra.Command {
 			return cli.RenderResult(cmd, &output.Result{
 				Value:   value,
 				Message: message,
-			}, meta(name, start, false))
+			}, meta(cfg, conn, name, start, false))
 		},
 	}
 }

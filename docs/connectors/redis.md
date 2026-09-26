@@ -42,7 +42,7 @@ Redis connector 接入 Redis standalone 实例（Redis 6+，含 Redis 8），驱
 
 ### 通用数据命令
 
-以下命令均支持 `-c/--conn` 与全局 `--timeout`。
+以下命令均支持 `-c/--conn` 与全局 `--timeout`。除 `info` 外均为 keyspace 命令，支持 `--db n` 覆盖本次调用的逻辑库（优先级：`--db` > connection.db > instance.db（遗留） > 0；仅本次调用生效，不落盘）；envelope `meta.db` 回显实际生效的 db。server 级的 `info`、`config get` 无 `--db`。
 
 | 命令 | 参数 / flag | data 形状 |
 |---|---|---|
@@ -50,7 +50,7 @@ Redis connector 接入 Redis standalone 实例（Redis 6+，含 Redis 8），驱
 | `redis get <key>` | `--binary`、`--max-bytes`、`--highlight` | `{value}`，key 不存在 → `value: null` |
 | `redis set <key> [value]` | `--ttl <duration>`（如 30s）、`--nx`、`--xx`、`--file <path>`（从文件读值，与位置参数互斥；二进制安全；`-` 读 stdin） | `{value}`，OK / null（nx/xx 条件不满足） |
 | `redis del <key> [key...]` | — | `{deleted: N}` |
-| `redis keys [pattern]` | `--limit N`（默认 1000，0 不截断） | columns/rows 单列 `key`；SCAN 实现，绝不使用 KEYS |
+| `redis scan [pattern]` | `--type string\|list\|set\|zset\|hash\|stream`（服务端 TYPE 过滤）、`--count N`（每批 SCAN COUNT，默认 100，只影响节奏不影响结果）、`--cursor N`（单轮模式：只扫一轮，`meta.cursor` 返回下一游标，0 表示一轮完整迭代结束）、`--limit N`（默认 1000，0 不截断） | columns/rows 单列 `key`；SCAN 实现，绝不使用 KEYS |
 | `redis type <key>` | — | `{value}`，不存在 → "none" |
 | `redis ttl <key>` | `--ms`（改用 PTTL） | `{value}` 秒/毫秒，-1 无过期 / -2 不存在 |
 | `redis info [section]` | — | 嵌套 map `{section: {field: value}}`；无参用 INFO 默认段 |
@@ -58,7 +58,7 @@ Redis connector 接入 Redis standalone 实例（Redis 6+，含 Redis 8），驱
 
 ### 数据结构读命令
 
-均支持 `--binary` / `--max-bytes`；多行结果（hgetall/lrange/smembers/zrange/config get）受全局 `--limit`（默认 1000，0 不截断）约束，hget 为单值不适用。
+均支持 `--binary` / `--max-bytes` 与 `--db`；多行结果（hgetall/lrange/smembers/zrange/config get）受全局 `--limit`（默认 1000，0 不截断）约束，hget 为单值不适用。
 
 | 命令 | 参数 / flag | data 形状 |
 |---|---|---|
@@ -74,7 +74,7 @@ Redis connector 接入 Redis standalone 实例（Redis 6+，含 Redis 8），驱
 
 | 命令 | 参数 / flag | data 形状 |
 |---|---|---|
-| `redis eval <script>` | `--file <path>`（从文件读脚本，与位置参数二选一）、`--key`（可重复，顺序即 KEYS[]）、`--arg`（可重复，顺序即 ARGV[]）、`--binary`、`--max-bytes`、`--highlight` | `{type, value}`，同 exec |
+| `redis eval <script>` | `--file <path>`（从文件读脚本，与位置参数二选一）、`--key`（可重复，顺序即 KEYS[]）、`--arg`（可重复，顺序即 ARGV[]）、`--binary`、`--max-bytes`、`--highlight`、`--db` | `{type, value}`，同 exec |
 | `redis config get [pattern]` | `--binary`、`--max-bytes` | columns `field, value`；pattern 默认 `*`；凭据类参数（requirepass/masterauth）的值脱敏为 `***`（空值保持空，可判断是否已设置） |
 
 exec/eval 的 `type` 枚举为 string/integer/double/boolean/array/map/null：go-redis 的通用应答不区分 simple string 与 bulk string，统一报 `string`；RESP3 的 double 报 `double`、bool 报 `boolean`，big number 以十进制字符串形式归入 `integer`。
@@ -85,6 +85,7 @@ connector 侧命令名分类，exec 与结构化命令共用一张分类表：
 
 - `readonly: true`：仅允许读命令（get/mget/getrange/strlen/exists/ttl/pttl/type/scan/sscan/hscan/zscan/randomkey/hget 族/lrange 族/smembers 族/zrange 族/xinfo/xrange/xlen/dbsize/info/config get/ping/echo/object/memory usage），违反报 `READONLY_VIOLATION`（退出码 5）。`eval` 属写操作，readonly 连接拒绝。与服务端 ACL（如 `+@read` 用户）可叠加成双保险；服务端 NOPERM 报 `AUTH_FAILED`（退出码 4）。
 - `allowDangerous: false`（默认）：拒绝 `FLUSHALL FLUSHDB SHUTDOWN DEBUG KEYS RESET FAILOVER REPLICAOF SLAVEOF SWAPDB SCRIPT` 以及 `CONFIG` 的非 GET 子命令，报 `UNSUPPORTED_OPERATION`（退出码 2，与 output 中央映射一致，属用法类），hint 指向连接配置。`CONFIG GET` 是唯一按子命令拆分放行的命令。
+- `SELECT` 一律拦截（含可写与 allowDangerous 连接）：muxcat 每次调用独立建连，SELECT 不会跨调用生效，透传只会"假成功"。报 `UNSUPPORTED_OPERATION`，hint 指向 `--db`。
 
 负数位置参数（如 `lrange queue 0 -1`、`exec ZRANGE board 0 -1`）是 Redis 惯例写法：exec / lrange / zrange 已关闭 flag 与位置参数的交错解析，flag 需置于位置参数之前，位置参数之后的一律按参数处理。
 
@@ -117,7 +118,7 @@ connector 侧命令名分类，exec 与结构化命令共用一张分类表：
 
 - 仅 standalone；Cluster / Sentinel / Pub-Sub / Monitor 不在第一版范围。
 - 拦截是"防误操作"而非安全边界：Lua 内 `redis.call(...)` 可绕过 connector 侧拦截，强制约束需服务端 ACL（如 `+@read` 或禁用 script 命令类）。
-- `keys` 用 SCAN 实现，大库上遍历耗时长，受 `--limit` 与 `--timeout` 约束。
-- `hgetall`/`smembers`/`zrange`/`config get` 为全量拉取后按 `--limit` 截断展示，`--limit` 不限制传输量，大集合上注意；`keys` 不受此限（SCAN 逐批拉取）。
+- `scan` 用 SCAN 实现，大库上遍历耗时长，受 `--limit` 与 `--timeout` 约束；`--cursor` 单轮模式的游标可跨调用续扫（SCAN 服务端无状态），但无快照语义，服务端重启/failover 后游标失效。`--type` 依赖 Redis 6.0 的 SCAN TYPE 过滤，更老的服务器报 syntax error 时 hint 会指出版本要求。
+- `hgetall`/`smembers`/`zrange`/`config get` 为全量拉取后按 `--limit` 截断展示，`--limit` 不限制传输量，大集合上注意；`scan` 不受此限（SCAN 逐批拉取）。
 - 表格类命令的 data 形状为 `{columns, rows}`（列均为 string，无 `row_count`/`rows_affected`），与 sqlite query 的 data 形状不同。
 - TLS 仅开关，不支持自定义 CA / 客户端证书（后续迭代）。
