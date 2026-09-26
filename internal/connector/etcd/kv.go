@@ -44,25 +44,31 @@ func dial(cmd *cobra.Command, cfg *Config, conn Connection) (context.Context, co
 func newGetCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "get <key>",
-		Short: "Get the value of a key, or a range of keys with --prefix",
-		Long: `Get the value of a key (value is null when the key does not exist).
-With --prefix the key is treated as a prefix and all matching keys are
-listed (columns key/value/create_rev/mod_rev/version/lease, sorted by
-key; --keys-only omits the value column). --rev reads at a historical
+		Short: "Get a key, or a range of keys with --prefix",
+		Long: `Get a key (an empty result when the key does not exist), or every
+key under a prefix with --prefix. Both forms render the same row shape
+(columns key/value/create_rev/mod_rev/version/lease, sorted by key;
+--keys-only omits the value column). --rev reads at a historical
 revision; --limit caps prefix results (meta.truncated tells you the
-listing stopped early).`,
+listing stopped early). --bare prints just the value for scripts
+(single-key form only).`,
 		Args: cli.ExactArgs(1, "<key>", "key"),
 		Example: `  muxcat etcd get mykey
+  muxcat etcd get mykey --bare
   muxcat etcd get /services/ --prefix --limit 20
-  muxcat etcd get /services/ --prefix --keys-only
   muxcat etcd get mykey --rev 42 --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
 			prefix := cli.FlagBool(cmd, "prefix")
 			keysOnly := cli.FlagBool(cmd, "keys-only")
+			bare := cli.FlagBool(cmd, "bare")
 			if keysOnly && !prefix {
 				return output.NewError(output.CodeMissingArgument,
 					"--keys-only requires --prefix", "")
+			}
+			if bare && prefix {
+				return output.NewError(output.CodeMissingArgument,
+					"--bare cannot be used with --prefix", "")
 			}
 			rev, _ := cmd.Flags().GetInt64("rev")
 			if rev < 0 {
@@ -84,11 +90,18 @@ listing stopped early).`,
 			if rev > 0 {
 				opts = append(opts, clientv3.WithRev(rev))
 			}
-			if !prefix {
-				resp, err := client.Get(ctx, args[0], opts...)
-				if err != nil {
-					return classifyErr(err, "get failed")
+			if prefix {
+				opts = append(opts, clientv3.WithPrefix())
+				if limit := cli.FlagLimit(cmd); limit > 0 {
+					opts = append(opts, clientv3.WithLimit(int64(limit)))
 				}
+			}
+			resp, err := client.Get(ctx, args[0], opts...)
+			if err != nil {
+				return classifyErr(err, "get failed")
+			}
+
+			if bare {
 				var value any
 				if resp.Count > 0 {
 					value = string(resp.Kvs[0].Value)
@@ -99,15 +112,6 @@ listing stopped early).`,
 				}, meta(cfg, conn, name, start, false))
 			}
 
-			limit := cli.FlagLimit(cmd)
-			if limit > 0 {
-				opts = append(opts, clientv3.WithLimit(int64(limit)))
-			}
-			opts = append(opts, clientv3.WithPrefix())
-			resp, err := client.Get(ctx, args[0], opts...)
-			if err != nil {
-				return classifyErr(err, "get failed")
-			}
 			columns := []string{"key", "value", "create_rev", "mod_rev", "version", "lease"}
 			if keysOnly {
 				columns = []string{"key", "create_rev", "mod_rev", "version", "lease"}
@@ -129,6 +133,7 @@ listing stopped early).`,
 	}
 	c.Flags().Bool("prefix", false, "treat <key> as a prefix and list all matching keys")
 	c.Flags().Bool("keys-only", false, "omit the value column (requires --prefix)")
+	c.Flags().Bool("bare", false, "print just the value (single-key form only, for scripts)")
 	c.Flags().Int64("rev", 0, "read at this revision (0 = latest)")
 	return c
 }

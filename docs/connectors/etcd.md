@@ -45,7 +45,7 @@ etcd connector 接入 etcd v3 API（仅 v3），驱动为 `go.etcd.io/etcd/clien
 
 | 命令 | 参数 / flag | data 形状 |
 |---|---|---|
-| `etcd get <key>` | `--prefix`、`--keys-only`（需配合 `--prefix`）、`--rev N`、`--limit N`（全局，默认 1000，0 不截断） | 单 key：`{value}`（key 不存在 → `value: null`），文本模式裸输出值；`--prefix`：columns `key, value, create_rev, mod_rev, version, lease`（按 key 排序，`--keys-only` 省略 value 列），命中 limit 时 `meta.truncated: true` |
+| `etcd get <key>` | `--prefix`、`--keys-only`（需配合 `--prefix`）、`--rev N`、`--limit N`（全局，默认 1000，0 不截断）、`--bare` | 单 key 与 `--prefix` 统一为同一行形状：columns `key, value, create_rev, mod_rev, version, lease`（按 key 排序，单 key 即一行，key 不存在则空表），`--keys-only` 省略 value 列，命中 limit 时 `meta.truncated: true`；`--bare`（仅单 key，与 `--prefix` 互斥）只输出值本身供脚本用（key 不存在 → 空输出，exit 0），JSON 下为 `{value}` |
 | `etcd put <key> <value>` | `--lease-id N`（挂到已有 lease；lease 管理本身不做） | `{value: "OK"}`，裸输出 OK。写操作，readonly 连接拒绝 |
 | `etcd del <key>` | `--prefix`（危险操作，需连接开 allowDangerous） | `{deleted: N}`。写操作，readonly 连接拒绝 |
 | `etcd watch <key>` | `--prefix`、`--rev N`、`--max-events N`（默认 10）、`--timeout <duration>`（本地 flag，默认 10s，遮蔽全局 `--timeout`） | 有界收集：凑满 max-events 或超时后一次性输出 events 数组 `[{type: "PUT"\|"DELETE", key, value, mod_revision}, ...]`（DELETE 事件无 value）；文本模式输出缩进 JSON（按 json 高亮），JSON envelope 的 data 即该数组 |

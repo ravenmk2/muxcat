@@ -474,6 +474,10 @@ func TestWatchFlagValidation(t *testing.T) {
 	if e := output.ToError(err); err == nil || e.Code != output.CodeMissingArgument {
 		t.Fatalf("--keys-only without --prefix: err=%v", err)
 	}
+	_, err = runMuxcat(t, "etcd", "get", "/a/", "--prefix", "--bare")
+	if e := output.ToError(err); err == nil || e.Code != output.CodeMissingArgument {
+		t.Fatalf("--bare with --prefix: err=%v", err)
+	}
 	_, err = runMuxcat(t, "etcd", "get", "k", "--rev", "-1")
 	if e := output.ToError(err); err == nil || e.Code != output.CodeMissingArgument {
 		t.Fatalf("get --rev -1: err=%v", err)
