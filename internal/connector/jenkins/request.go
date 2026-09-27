@@ -36,9 +36,11 @@ with /, e.g.:
   muxcat jk request POST /job/my-job/build --file params.json
 
 Any completed exchange is reported as {status, headers, body} whatever
-the status code; only transport failures become errors. Unsafe methods
-automatically carry the CSRF crumb (with one refresh-and-retry), so
-write endpoints are reachable too. On readonly connections only
+the status code; only transport failures become errors. A request body
+defaults to Content-Type application/json; --content-type overrides it
+(e.g. text/xml when posting a job's config.xml to /createItem). Unsafe
+methods automatically carry the CSRF crumb (with one refresh-and-retry),
+so write endpoints are reachable too. On readonly connections only
 GET/HEAD are allowed.`,
 		Args: cli.ExactArgs(2, "<method> <path>", "method", "path"),
 		Example: `  muxcat jenkins request GET /api/json
@@ -76,7 +78,7 @@ GET/HEAD are allowed.`,
 			}
 			// Raw passthrough: a completed exchange is reported whatever the
 			// status; only transport failures become errors.
-			resp, err := cl.exchange(cmd.Context(), method, path, body)
+			resp, err := cl.exchange(cmd.Context(), method, path, body, cli.FlagString(cmd, "content-type"))
 			if err != nil {
 				return err
 			}
@@ -93,6 +95,7 @@ GET/HEAD are allowed.`,
 		},
 	}
 	c.Flags().String("file", "", "read the request body from a file (- reads stdin)")
+	c.Flags().String("content-type", "", "override the request body's Content-Type (default application/json), e.g. text/xml for config.xml")
 	return c
 }
 

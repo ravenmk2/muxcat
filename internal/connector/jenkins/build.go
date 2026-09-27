@@ -21,16 +21,17 @@ const defaultLogTail = 200
 func newBuildCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "build",
-		Short: "Inspect Jenkins builds",
+		Short: "Inspect and control Jenkins builds",
 		Long: `Inspect the builds of a job: list build history, show one
-build's details (parameters, causes, artifacts, changelog), or read
-its console log. The build is addressed by number or by alias:
-last, lastSuccessful, lastFailed, lastCompleted.`,
+build's details (parameters, causes, artifacts, changelog), read its
+console log (tail by default, --follow streams a running build), or
+abort a running build with stop. The build is addressed by number or
+by alias: last, lastSuccessful, lastFailed, lastCompleted.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
 	}
-	c.AddCommand(newBuildLsCmd(), newBuildShowCmd(), newBuildLogCmd())
+	c.AddCommand(newBuildLsCmd(), newBuildShowCmd(), newBuildLogCmd(), newBuildStopCmd())
 	return c
 }
 
@@ -237,16 +238,21 @@ func changeSet(v any) []string {
 func newBuildLogCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "log <job> <n|alias>",
-		Short: "Read a build's console log (tail by default; --full for all)",
+		Short: "Read a build's console log (tail by default; --full for all; --follow streams)",
 		Long: `Read a build's console log via the progressiveText endpoint.
 By default only the last 200 lines are shown (the global --limit flag
-overrides the count; --limit 0 or --full prints everything). The log
-is fetched with the start-offset form of the endpoint, which a future
---follow mode will poll.`,
+overrides the count; --limit 0 or --full prints everything). --follow
+keeps polling the start-offset form of the endpoint and streams new
+chunks as the build produces them, until the build's log is complete
+(--wait-timeout bounds the follow). Output model: text modes stream
+chunks to stdout as they arrive; --json cannot stream, so it collects
+everything and emits a single envelope with the complete log at the
+end.`,
 		Args: cli.ExactArgs(2, "<job> <n|alias>", "job", "n|alias"),
 		Example: `  muxcat jenkins build log my-job last
   muxcat jenkins build log my-job 42 --limit 500
   muxcat jenkins build log my-job last --full
+  muxcat jenkins build log my-job last --follow
   muxcat jenkins build log my-job last --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
@@ -258,7 +264,8 @@ is fetched with the start-offset form of the endpoint, which a future
 			if err != nil {
 				return err
 			}
-			text, size, _, err := fetchLog(cmd.Context(), cl, jobPath(args[0]), ref, 0)
+			path := jobPath(args[0])
+			text, size, more, err := fetchLog(cmd.Context(), cl, path, ref, 0)
 			if err != nil {
 				return err
 			}
@@ -276,19 +283,75 @@ is fetched with the start-offset form of the endpoint, which a future
 			if truncated {
 				out = fmt.Sprintf("... (showing last %d lines, --full for all)\n%s", shown, out)
 			}
+			if !cli.FlagBool(cmd, "follow") {
+				return cli.RenderResult(cmd, &output.Result{
+					Value: out,
+					JSONData: map[string]any{
+						"job":       args[0],
+						"build":     args[1],
+						"size":      size,
+						"truncated": truncated,
+						"log":       out,
+					},
+				}, meta(name, start, truncated))
+			}
+
+			// --follow: text modes stream increments to stdout as they
+			// arrive; --json cannot stream, so the increments are
+			// collected and a single envelope with the complete log is
+			// emitted at the end.
+			wt, err := waitTimeout(cmd)
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), wt)
+			defer cancel()
+			jsonMode := cli.FlagBool(cmd, "json") || strings.EqualFold(cli.FlagString(cmd, "output"), "json")
+			w := cmd.OutOrStdout()
+			if !jsonMode {
+				_, _ = fmt.Fprintln(w, out)
+			}
+			var whole strings.Builder
+			whole.WriteString(text)
+			offset := size
+			for more {
+				if err := sleepCtx(ctx, logPollInterval); err != nil {
+					return waitCtxErr(ctx)
+				}
+				chunk, newSize, m, err := fetchLog(ctx, cl, path, ref, offset)
+				if werr := waitCtxErr(ctx); werr != nil {
+					return werr
+				}
+				if err != nil {
+					return err
+				}
+				if newSize > offset {
+					offset = newSize
+				}
+				whole.WriteString(chunk)
+				if !jsonMode && chunk != "" {
+					_, _ = fmt.Fprint(w, chunk)
+				}
+				more = m
+			}
+			if !jsonMode {
+				return nil
+			}
 			return cli.RenderResult(cmd, &output.Result{
-				Value: out,
+				Value: whole.String(),
 				JSONData: map[string]any{
 					"job":       args[0],
 					"build":     args[1],
-					"size":      size,
-					"truncated": truncated,
-					"log":       out,
+					"size":      offset,
+					"truncated": false,
+					"log":       whole.String(),
 				},
-			}, meta(name, start, truncated))
+			}, meta(name, start, false))
 		},
 	}
 	c.Flags().Bool("full", false, "print the whole log instead of the tail")
+	c.Flags().Bool("follow", false, "stream new log chunks until the build's log is complete")
+	addWaitTimeoutFlag(c)
 	return c
 }
 
@@ -324,4 +387,37 @@ func lineCount(s string) int {
 		return 0
 	}
 	return strings.Count(strings.TrimRight(s, "\n"), "\n") + 1
+}
+
+func newBuildStopCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop <job> <n|alias>",
+		Short: "Abort a running build (POST /job/.../{n}/stop)",
+		Args:  cli.ExactArgs(2, "<job> <n|alias>", "job", "n|alias"),
+		Example: `  muxcat jenkins build stop my-job 42
+  muxcat jenkins build stop my-job last`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			start := time.Now()
+			name, conn, cl, _, err := openForCmd(cmd)
+			if err != nil {
+				return err
+			}
+			if conn.Readonly {
+				return readonlyErr("build stop")
+			}
+			ref, err := buildRef(args[1])
+			if err != nil {
+				return err
+			}
+			// Jenkins answers with a 302 to the build page; the http client
+			// follows it, so any non-2xx reaching here is a real failure.
+			if _, err := cl.do(cmd.Context(), "POST", jobPath(args[0])+"/"+ref+"/stop", nil); err != nil {
+				return err
+			}
+			return cli.RenderResult(cmd, &output.Result{
+				Value:   map[string]any{"job": args[0], "number": args[1], "stopped": true},
+				Message: fmt.Sprintf("stop requested for %s #%s", args[0], args[1]),
+			}, meta(name, start, false))
+		},
+	}
 }

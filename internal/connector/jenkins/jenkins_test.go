@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -71,11 +73,18 @@ type jkServer struct {
 	crumbValue   string
 	crumbFetches int
 	logStart     string
+	buildQuery   string
+	postCalls    map[string]int
+	writeCrumb   map[string]string
 }
 
 func newJkServer(t *testing.T) *jkServer {
 	t.Helper()
-	s := &jkServer{crumbValue: "crumb-v1"}
+	s := &jkServer{
+		crumbValue: "crumb-v1",
+		postCalls:  map[string]int{},
+		writeCrumb: map[string]string{},
+	}
 
 	// A 250-line console log, long enough to exercise the tail cutoff.
 	var logSB strings.Builder
@@ -184,6 +193,7 @@ func newJkServer(t *testing.T) *jkServer {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"method": r.Method, "crumb": r.Header.Get("Jenkins-Crumb"),
+			"content_type": r.Header.Get("Content-Type"),
 		})
 	})
 	// /stale-crumb rejects the crumb it currently issues (simulating a
@@ -206,6 +216,169 @@ func newJkServer(t *testing.T) *jkServer {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte("<html>Access denied</html>"))
 	})
+
+	// --- v2 write-operation state machine ---------------------------------
+	recordPost := func(r *http.Request) {
+		s.mu.Lock()
+		s.postCalls[r.URL.Path]++
+		s.writeCrumb[r.URL.Path] = r.Header.Get("Jenkins-Crumb")
+		s.mu.Unlock()
+	}
+	queueLoc := func(w http.ResponseWriter, id string) {
+		w.Header().Set("Location", s.URL+"/queue/item/"+id+"/")
+		w.WriteHeader(http.StatusCreated)
+	}
+	var queue99Calls, build7Calls int
+	// pipe is parameterized: the probe sees parameterDefinitions, so job
+	// build must use buildWithParameters even without --param.
+	mux.HandleFunc("/job/pipe/api/json", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"property":[{"parameterDefinitions":[{"name":"ENV"},{"name":"TAG"}]}]}`))
+	})
+	mux.HandleFunc("/job/pipe/build", func(w http.ResponseWriter, r *http.Request) {
+		recordPost(r)
+		queueLoc(w, "99")
+	})
+	mux.HandleFunc("/job/pipe/buildWithParameters", func(w http.ResponseWriter, r *http.Request) {
+		recordPost(r)
+		s.mu.Lock()
+		s.buildQuery = r.URL.RawQuery
+		s.mu.Unlock()
+		queueLoc(w, "99")
+	})
+	// Queue item 99 assigns build 7 on the second poll.
+	mux.HandleFunc("/queue/item/99/api/json", func(w http.ResponseWriter, _ *http.Request) {
+		s.mu.Lock()
+		queue99Calls++
+		n := queue99Calls
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if n == 1 {
+			_, _ = w.Write([]byte(`{"why":"Waiting for next available executor"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"executable":{"number":7,"url":"` + s.URL + `/job/pipe/7/"}}`))
+	})
+	// Build 7 reports running on the first poll, SUCCESS after; its log
+	// arrives in three progressiveText chunks.
+	mux.HandleFunc("/job/pipe/7/api/json", func(w http.ResponseWriter, _ *http.Request) {
+		s.mu.Lock()
+		build7Calls++
+		n := build7Calls
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if n == 1 {
+			_, _ = w.Write([]byte(`{"number":7,"displayName":"#7","building":true,"result":null,"timestamp":1700000000000,"duration":0,"url":"` + s.URL + `/job/pipe/7/"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"number":7,"displayName":"#7","building":false,"result":"SUCCESS","timestamp":1700000000000,"duration":61500,"url":"` + s.URL + `/job/pipe/7/"}`))
+	})
+	pipeLog := []string{"part-one\n", "part-two\n", "part-three\n"}
+	pipeLogEnds := make([]int64, 0, len(pipeLog))
+	var pipeLogTotal int64
+	for _, c := range pipeLog {
+		pipeLogTotal += int64(len(c))
+		pipeLogEnds = append(pipeLogEnds, pipeLogTotal)
+	}
+	mux.HandleFunc("/job/pipe/7/logText/progressiveText", func(w http.ResponseWriter, r *http.Request) {
+		start, _ := strconv.ParseInt(r.URL.Query().Get("start"), 10, 64)
+		idx := 0
+		for idx < len(pipeLogEnds) && pipeLogEnds[idx] <= start {
+			idx++
+		}
+		body, size, more := "", pipeLogTotal, false
+		if idx < len(pipeLog) {
+			body, size = pipeLog[idx], pipeLogEnds[idx]
+			more = idx < len(pipeLog)-1
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("X-Text-Size", fmt.Sprintf("%d", size))
+		if more {
+			w.Header().Set("X-More-Data", "true")
+		}
+		_, _ = w.Write([]byte(body))
+	})
+	mux.HandleFunc("/job/pipe/7/stop", func(w http.ResponseWriter, r *http.Request) {
+		recordPost(r)
+	})
+	mux.HandleFunc("/job/pipe/enable", func(w http.ResponseWriter, r *http.Request) {
+		recordPost(r)
+	})
+	mux.HandleFunc("/job/pipe/disable", func(w http.ResponseWriter, r *http.Request) {
+		recordPost(r)
+	})
+	// plain is not parameterized: the probe sees no parameterDefinitions,
+	// so job build must use plain /build.
+	mux.HandleFunc("/job/plain/api/json", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"property":[]}`))
+	})
+	mux.HandleFunc("/job/plain/build", func(w http.ResponseWriter, r *http.Request) {
+		recordPost(r)
+		queueLoc(w, "99")
+	})
+	// failing: build 8 reaches a terminal FAILURE immediately.
+	mux.HandleFunc("/job/failing/api/json", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"property":[]}`))
+	})
+	mux.HandleFunc("/job/failing/build", func(w http.ResponseWriter, r *http.Request) {
+		recordPost(r)
+		queueLoc(w, "102")
+	})
+	mux.HandleFunc("/queue/item/102/api/json", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"executable":{"number":8,"url":"` + s.URL + `/job/failing/8/"}}`))
+	})
+	mux.HandleFunc("/job/failing/8/api/json", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"number":8,"displayName":"#8","building":false,"result":"FAILURE","timestamp":1700000000000,"duration":12000,"url":"` + s.URL + `/job/failing/8/"}`))
+	})
+	// cancelled: the queue item is cancelled before assignment.
+	mux.HandleFunc("/job/cancelled/api/json", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"property":[]}`))
+	})
+	mux.HandleFunc("/job/cancelled/build", func(w http.ResponseWriter, r *http.Request) {
+		recordPost(r)
+		queueLoc(w, "100")
+	})
+	mux.HandleFunc("/queue/item/100/api/json", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"cancelled":true,"why":"Cancelled by Alice"}`))
+	})
+	// stuck: the queue item never gets an executable (wait-timeout test).
+	mux.HandleFunc("/job/stuck/api/json", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"property":[]}`))
+	})
+	mux.HandleFunc("/job/stuck/build", func(w http.ResponseWriter, r *http.Request) {
+		recordPost(r)
+		queueLoc(w, "101")
+	})
+	// fast: the idle-server race — the queue item is already gone (404) at
+	// the first poll, so the build must be found via builds[queueId]. The
+	// api/json handler serves both the parameter probe and the builds
+	// fallback (the mock ignores the tree filter).
+	mux.HandleFunc("/job/fast/api/json", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"property":[],"builds":[{"number":9,"queueId":103},{"number":8,"queueId":97}]}`))
+	})
+	mux.HandleFunc("/job/fast/build", func(w http.ResponseWriter, r *http.Request) {
+		recordPost(r)
+		queueLoc(w, "103")
+	})
+	mux.HandleFunc("/queue/item/103/api/json", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/job/fast/9/api/json", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"number":9,"displayName":"#9","building":false,"result":"SUCCESS","timestamp":1700000000000,"duration":5000,"url":"` + s.URL + `/job/fast/9/"}`))
+	})
+	mux.HandleFunc("/queue/item/101/api/json", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"why":"Waiting for next available executor"}`))
+	})
 	s.Server = httptest.NewServer(mux)
 	t.Cleanup(s.Close)
 	return s
@@ -227,6 +400,32 @@ func (s *jkServer) lastLogStart() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.logStart
+}
+
+func (s *jkServer) lastBuildQuery() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buildQuery
+}
+
+func (s *jkServer) postCount(path string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.postCalls[path]
+}
+
+func (s *jkServer) crumbOn(path string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.writeCrumb[path]
+}
+
+// shrinkPollIntervals makes the --wait/--follow poll loops test-fast.
+func shrinkPollIntervals(t *testing.T) {
+	t.Helper()
+	origQ, origB, origL := queuePollInterval, buildPollInterval, logPollInterval
+	queuePollInterval, buildPollInterval, logPollInterval = time.Millisecond, time.Millisecond, time.Millisecond
+	t.Cleanup(func() { queuePollInterval, buildPollInterval, logPollInterval = origQ, origB, origL })
 }
 
 func (s *jkServer) addConn(t *testing.T, name string, extra ...string) {
@@ -699,5 +898,281 @@ func TestSchemaValidation(t *testing.T) {
 	invalidConn := []byte(`{"version":1,"connections":{"local":{"instance":"local","password":"enc:v1:x"}}}`)
 	if err := schema.Validate(FileName, invalidConn); err == nil {
 		t.Fatal("config with unknown connection field accepted")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// v2: write operations + log --follow
+// ---------------------------------------------------------------------------
+
+func TestJobBuildNoWait(t *testing.T) {
+	setupEnv(t)
+	shrinkPollIntervals(t)
+	s := newJkServer(t)
+	s.addConn(t, "local")
+
+	// --param switches to buildWithParameters and passes k=v via query.
+	out, err := runMuxcat(t, "jk", "job", "build", "pipe", "--param", "ENV=uat", "--param", "TAG=v1.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "queue item 99") {
+		t.Fatalf("job build output unexpected:\n%s", out)
+	}
+	if s.postCount("/job/pipe/buildWithParameters") != 1 {
+		t.Fatalf("buildWithParameters calls = %d", s.postCount("/job/pipe/buildWithParameters"))
+	}
+	q, _ := url.ParseQuery(s.lastBuildQuery())
+	if q.Get("ENV") != "uat" || q.Get("TAG") != "v1.2" {
+		t.Fatalf("build query = %q", s.lastBuildQuery())
+	}
+	if s.crumbOn("/job/pipe/buildWithParameters") != "crumb-v1" {
+		t.Fatalf("crumb not attached: %q", s.crumbOn("/job/pipe/buildWithParameters"))
+	}
+
+	// A parameterized job goes to buildWithParameters even without
+	// --param (a bare POST /build would 400 "Nothing is submitted").
+	if _, err := runMuxcat(t, "jk", "job", "build", "pipe"); err != nil {
+		t.Fatal(err)
+	}
+	if s.postCount("/job/pipe/buildWithParameters") != 2 || s.postCount("/job/pipe/build") != 0 {
+		t.Fatalf("parameterized endpoint pick: bwp=%d build=%d",
+			s.postCount("/job/pipe/buildWithParameters"), s.postCount("/job/pipe/build"))
+	}
+
+	// A non-parameterized job goes to plain /build; --json carries the
+	// queue id.
+	env := runJSON(t, "jk", "job", "build", "plain")
+	data := env["data"].(map[string]any)
+	if data["queued"] != true || data["queue_id"] != "99" {
+		t.Fatalf("job build JSON unexpected: %v", data)
+	}
+	if s.postCount("/job/plain/build") != 1 {
+		t.Fatalf("/job/plain/build calls = %d", s.postCount("/job/plain/build"))
+	}
+}
+
+func TestJobBuildWaitSuccess(t *testing.T) {
+	setupEnv(t)
+	shrinkPollIntervals(t)
+	s := newJkServer(t)
+	s.addConn(t, "local")
+
+	out, err := runMuxcat(t, "jk", "job", "build", "pipe", "--wait")
+	if err != nil {
+		t.Fatalf("--wait failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{"7", "SUCCESS"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("--wait output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestJobBuildWaitFailure(t *testing.T) {
+	setupEnv(t)
+	shrinkPollIntervals(t)
+	s := newJkServer(t)
+	s.addConn(t, "local")
+
+	// Text mode: the summary is rendered, then the command fails with
+	// QUERY_ERROR (exit 5).
+	out, err := runMuxcat(t, "jk", "job", "build", "failing", "--wait")
+	e := output.ToError(err)
+	if e.Code != output.CodeQueryError {
+		t.Fatalf("code = %v, want %s", e, output.CodeQueryError)
+	}
+	if got := output.ExitCode(e); got != output.ExitExec {
+		t.Fatalf("exit = %d, want %d", got, output.ExitExec)
+	}
+	if !strings.Contains(e.Message, "FAILURE") || !strings.Contains(out, "FAILURE") {
+		t.Fatalf("failure not reported: %v\n%s", e, out)
+	}
+
+	// JSON mode: the error carries the build summary as partial data.
+	_, err = runMuxcat(t, "jk", "job", "build", "failing", "--wait", "--json")
+	e = output.ToError(err)
+	if e.Code != output.CodeQueryError {
+		t.Fatalf("json code = %v", e)
+	}
+	data, ok := e.Data.(map[string]any)
+	if !ok || data["result"] != "FAILURE" {
+		t.Fatalf("failure envelope lost the build data: %v", e.Data)
+	}
+}
+
+func TestJobBuildQueueCancelled(t *testing.T) {
+	setupEnv(t)
+	shrinkPollIntervals(t)
+	s := newJkServer(t)
+	s.addConn(t, "local")
+
+	_, err := runMuxcat(t, "jk", "job", "build", "cancelled", "--wait")
+	e := output.ToError(err)
+	if e.Code != output.CodeQueryError || !strings.Contains(e.Message, "cancelled") {
+		t.Fatalf("cancelled error = %v", e)
+	}
+}
+
+func TestJobBuildWaitQueueGone(t *testing.T) {
+	setupEnv(t)
+	shrinkPollIntervals(t)
+	s := newJkServer(t)
+	s.addConn(t, "local")
+
+	// The queue item 404s at the first poll (idle-server race); the build
+	// number is recovered by matching queueId in the job's builds.
+	out, err := runMuxcat(t, "jk", "job", "build", "fast", "--wait")
+	if err != nil {
+		t.Fatalf("--wait over the queue-404 race failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{"9", "SUCCESS"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestJobBuildWaitTimeout(t *testing.T) {
+	setupEnv(t)
+	shrinkPollIntervals(t)
+	s := newJkServer(t)
+	s.addConn(t, "local")
+
+	_, err := runMuxcat(t, "jk", "job", "build", "stuck", "--wait", "--wait-timeout", "200ms")
+	e := output.ToError(err)
+	if e.Code != output.CodeTimeout {
+		t.Fatalf("code = %v, want %s", e, output.CodeTimeout)
+	}
+	if !strings.Contains(e.Hint, "--wait-timeout") {
+		t.Fatalf("hint should point at --wait-timeout: %q", e.Hint)
+	}
+}
+
+func TestJobBuildParamInvalid(t *testing.T) {
+	setupEnv(t)
+	s := newJkServer(t)
+	s.addConn(t, "local")
+
+	for _, bad := range []string{"NOEQ", "=novalue"} {
+		_, err := runMuxcat(t, "jk", "job", "build", "pipe", "--param", bad)
+		if output.ToError(err).Code != output.CodeConfigInvalid {
+			t.Fatalf("--param %q code = %v", bad, output.ToError(err))
+		}
+	}
+	if s.postCount("/job/pipe/build")+s.postCount("/job/pipe/buildWithParameters") != 0 {
+		t.Fatal("invalid --param still triggered a build")
+	}
+}
+
+func TestWriteReadonly(t *testing.T) {
+	setupEnv(t)
+	shrinkPollIntervals(t)
+	s := newJkServer(t)
+	s.addConn(t, "ro", "--readonly")
+
+	cases := [][]string{
+		{"jk", "-c", "ro", "job", "build", "pipe"},
+		{"jk", "-c", "ro", "build", "stop", "pipe", "7"},
+		{"jk", "-c", "ro", "job", "enable", "pipe"},
+		{"jk", "-c", "ro", "job", "disable", "pipe"},
+	}
+	for _, args := range cases {
+		_, err := runMuxcat(t, args...)
+		if e := output.ToError(err); e.Code != output.CodeReadonlyViolation {
+			t.Fatalf("%v code = %v, want %s", args, e, output.CodeReadonlyViolation)
+		}
+	}
+	// No write request reached the server.
+	for _, path := range []string{"/job/pipe/build", "/job/pipe/7/stop", "/job/pipe/enable", "/job/pipe/disable"} {
+		if s.postCount(path) != 0 {
+			t.Fatalf("readonly connection reached %s", path)
+		}
+	}
+}
+
+func TestBuildLogFollow(t *testing.T) {
+	setupEnv(t)
+	shrinkPollIntervals(t)
+	s := newJkServer(t)
+	s.addConn(t, "local")
+
+	// Text mode streams the chunks in order.
+	out, err := runMuxcat(t, "jk", "build", "log", "pipe", "7", "--follow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	i1 := strings.Index(out, "part-one")
+	i2 := strings.Index(out, "part-two")
+	i3 := strings.Index(out, "part-three")
+	if i1 < 0 || i2 < 0 || i3 < 0 || i1 >= i2 || i2 >= i3 {
+		t.Fatalf("follow chunks missing or out of order:\n%s", out)
+	}
+
+	// --json collects the whole log into one envelope.
+	env := runJSON(t, "jk", "build", "log", "pipe", "7", "--follow")
+	data := env["data"].(map[string]any)
+	if data["log"] != "part-one\npart-two\npart-three\n" {
+		t.Fatalf("follow JSON log = %q", data["log"])
+	}
+}
+
+func TestBuildStopAndJobEnableDisable(t *testing.T) {
+	setupEnv(t)
+	s := newJkServer(t)
+	s.addConn(t, "local")
+
+	out, err := runMuxcat(t, "jk", "build", "stop", "pipe", "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "stop requested for pipe #7") {
+		t.Fatalf("stop output unexpected:\n%s", out)
+	}
+	if s.postCount("/job/pipe/7/stop") != 1 || s.crumbOn("/job/pipe/7/stop") == "" {
+		t.Fatalf("stop endpoint calls = %d, crumb = %q", s.postCount("/job/pipe/7/stop"), s.crumbOn("/job/pipe/7/stop"))
+	}
+
+	out, err = runMuxcat(t, "jk", "job", "disable", "pipe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "disabled job pipe") || s.postCount("/job/pipe/disable") != 1 {
+		t.Fatalf("disable failed:\n%s", out)
+	}
+	out, err = runMuxcat(t, "jk", "job", "enable", "pipe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "enabled job pipe") || s.postCount("/job/pipe/enable") != 1 {
+		t.Fatalf("enable failed:\n%s", out)
+	}
+
+	// JSON shape of a write command.
+	env := runJSON(t, "jk", "job", "disable", "pipe")
+	if env["data"].(map[string]any)["enabled"] != false {
+		t.Fatalf("disable JSON unexpected: %v", env["data"])
+	}
+}
+
+func TestRequestContentType(t *testing.T) {
+	setupEnv(t)
+	s := newJkServer(t)
+	s.addConn(t, "local")
+
+	f := filepath.Join(t.TempDir(), "config.xml")
+	if err := os.WriteFile(f, []byte("<project/>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Default: a body goes out as application/json.
+	env := runJSON(t, "jk", "request", "POST", "/echo", "--file", f)
+	if env["data"].(map[string]any)["body"].(map[string]any)["content_type"] != "application/json" {
+		t.Fatalf("default content type = %v", env["data"])
+	}
+	// --content-type overrides it (config.xml needs text/xml).
+	env = runJSON(t, "jk", "request", "POST", "/echo", "--file", f, "--content-type", "text/xml")
+	if env["data"].(map[string]any)["body"].(map[string]any)["content_type"] != "text/xml" {
+		t.Fatalf("content type override lost = %v", env["data"])
 	}
 }

@@ -1,9 +1,9 @@
 // Package jenkins implements muxcat's Jenkins connector: a plain net/http
 // client for Jenkins' REST API (HTTP basic auth with username + API token).
-// Read-only inspection is covered: job/folder browsing, build history and
-// console logs, queue and node status, plus a raw request passthrough.
-// Write operations (trigger/stop builds, enable/disable jobs) are out of
-// scope for this version.
+// It covers job/folder browsing, build history and console logs (with
+// follow), queue and node status, build triggering (--wait polls to
+// completion) and stopping, job enable/disable, plus a raw request
+// passthrough.
 package jenkins
 
 import (
@@ -53,9 +53,10 @@ Quickstart:
 A connection carries credentials (username + API token, encrypted at
 rest, never echoed) and policies: readonly allows GET/HEAD requests
 only. The command name is jenkins (alias jk). Jobs inside folders are
-addressed by full name (folder/sub/job). Build triggering and other
-write operations are out of scope — use request to pass any endpoint
-through.`,
+addressed by full name (folder/sub/job). Write operations are covered:
+job build triggers a build (--wait polls it to completion), build stop
+aborts one, job enable/disable toggles a job; request passes any other
+endpoint through.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -153,7 +154,7 @@ type response struct {
 // do performs one HTTP call and classifies non-2xx statuses into
 // structured errors. path is appended to the instance base URL verbatim.
 func (c *client) do(ctx context.Context, method, path string, body []byte) (*response, error) {
-	r, err := c.send(ctx, method, path, body)
+	r, err := c.send(ctx, method, path, body, "")
 	if err != nil {
 		return nil, err
 	}
@@ -165,27 +166,28 @@ func (c *client) do(ctx context.Context, method, path string, body []byte) (*res
 
 // exchange performs one HTTP call without status classification: any
 // completed exchange (including 4xx/5xx) is returned as-is for the request
-// passthrough command.
-func (c *client) exchange(ctx context.Context, method, path string, body []byte) (*response, error) {
-	return c.send(ctx, method, path, body)
+// passthrough command. contentType overrides the body's default
+// application/json Content-Type ("" keeps the default).
+func (c *client) exchange(ctx context.Context, method, path string, body []byte, contentType string) (*response, error) {
+	return c.send(ctx, method, path, body, contentType)
 }
 
 // send performs one HTTP call, attaching a CSRF crumb to unsafe methods.
 // When Jenkins rejects the crumb (403 "No valid crumb", e.g. after a
 // server restart), the crumb is refreshed once and the call retried.
-func (c *client) send(ctx context.Context, method, path string, body []byte) (*response, error) {
+func (c *client) send(ctx context.Context, method, path string, body []byte, contentType string) (*response, error) {
 	safe := method == "GET" || method == "HEAD"
 	if !safe {
 		c.ensureCrumb(ctx)
 	}
-	r, err := c.roundTrip(ctx, method, path, body)
+	r, err := c.roundTrip(ctx, method, path, body, contentType)
 	if err != nil {
 		return nil, err
 	}
 	if !safe && r.status == http.StatusForbidden && strings.Contains(string(r.body), "No valid crumb") {
 		c.crumbField, c.crumb, c.crumbTried = "", "", false
 		c.ensureCrumb(ctx)
-		r, err = c.roundTrip(ctx, method, path, body)
+		r, err = c.roundTrip(ctx, method, path, body, contentType)
 		if err != nil {
 			return nil, err
 		}
@@ -202,7 +204,7 @@ func (c *client) ensureCrumb(ctx context.Context) {
 		return
 	}
 	c.crumbTried = true
-	r, err := c.roundTrip(ctx, "GET", "/crumbIssuer/api/json", nil)
+	r, err := c.roundTrip(ctx, "GET", "/crumbIssuer/api/json", nil, "")
 	if err != nil || r.status != http.StatusOK {
 		return
 	}
@@ -216,8 +218,9 @@ func (c *client) ensureCrumb(ctx context.Context) {
 }
 
 // roundTrip performs the raw HTTP call. A nil body means no request body;
-// a non-nil body defaults Content-Type to application/json.
-func (c *client) roundTrip(ctx context.Context, method, path string, body []byte) (*response, error) {
+// a non-nil body defaults Content-Type to application/json unless
+// contentType says otherwise.
+func (c *client) roundTrip(ctx context.Context, method, path string, body []byte, contentType string) (*response, error) {
 	var rdr io.Reader
 	if body != nil {
 		rdr = bytes.NewReader(body)
@@ -233,7 +236,10 @@ func (c *client) roundTrip(ctx context.Context, method, path string, body []byte
 		req.Header.Set(c.crumbField, c.crumb)
 	}
 	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		req.Header.Set("Content-Type", contentType)
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {

@@ -1,6 +1,6 @@
 # jenkins connector
 
-Jenkins connector 通过 Jenkins 的 REST API（HTTP Basic Auth：username + API token）接入，实现为纯 `net/http` 客户端，无外部驱动依赖（符合 `CGO_ENABLED=0` 基线）。命令名 `jenkins`，别名 `jk`。本期为只读范围：连接管理、job/folder 浏览、build 历史与控制台日志、构建队列、节点状态、原生请求透传（request）；触发/停止构建、enable/disable job 等写操作不在本期范围（届时复用 crumb 机制与 progressiveText 轮询），需要时可先 `jk request` 透传。
+Jenkins connector 通过 Jenkins 的 REST API（HTTP Basic Auth：username + API token）接入，实现为纯 `net/http` 客户端，无外部驱动依赖（符合 `CGO_ENABLED=0` 基线）。命令名 `jenkins`，别名 `jk`。覆盖：连接管理、job/folder 浏览、build 历史与控制台日志（含 `--follow` 流式跟随）、构建队列、节点状态、写操作（`job build` 触发构建可 `--wait` 等待结果、`build stop`、`job enable/disable`）、原生请求透传（request）。其余管理端点可用 `jk request` 透传。
 
 API 核对的权威来源：Jenkins 实例自身的 `/api/` 文档入口 + 官方 Remote access API 文档。
 
@@ -48,6 +48,8 @@ API 核对的权威来源：Jenkins 实例自身的 `/api/` 文档入口 + 官�
 |---|---|---|---|
 | `jk job ls` | `--folder F`（从该 folder 开始列）、`--class C`（按 class 列筛选，如 `workflow-job`；客户端筛选，folder 递归不受影响） | `GET {prefix}/api/json?tree=jobs[name,fullName,url,color,buildable,lastBuild[number,result,timestamp]]` | `--json` 为入口响应原样；文本列 `full_name, class, status, last_build` |
 | `jk job show <job>` | — | `GET /job/.../api/json?tree=displayName,...,property[parameterDefinitions[...]]` | `--json` 为结构化 Value（参数默认值已脱敏）；文本为 `key: value` 列表，嵌套结构紧凑 JSON |
+| `jk job build <job>` | `--param k=v`（可重复）、`--wait`、`--wait-timeout`（默认 10m） | 先 `GET /job/.../api/json?tree=property[parameterDefinitions[name]]` 探测是否参数化：参数化（含 multibranch 分支 job）→ `POST buildWithParameters`（无 `--param` 时 query 为空，按默认值触发——参数化 job 的裸 `POST /build` 会被 Stapler 以 400 "Nothing is submitted" 拒绝）；非参数化 → `POST /build`（此时仍带 `--param` 走 buildWithParameters，服务端 400 原样上浮）。探测失败（如 404）直接上浮 | 无 `--wait`：`{queued, queue_id, queue_url}`；`--wait`：构建汇总 `{job, number, result, duration, url, timestamp}`（见「--wait 语义」） |
+| `jk job enable <job>` / `jk job disable <job>` | — | `POST /job/.../enable\|disable`（Jenkins 应答 302 跳 job 页，http client 自动跟随） | `{job, enabled: true\|false}` + Message |
 
 - `job ls` 对 folder（含 multibranch，`_class` 匹配）按 fullName 递归拉取，最大递归深度 10（防失控）。
 - `class` 列把 Java 类名简化为 `folder` / `workflow-job` / `freestyle` / `multibranch` / `matrix` 等；`status` 列映射 color 球：`blue→success`、`red→failed`、`yellow→unstable`、`aborted/disabled/not_built`，`_anime` 后缀统一为 `building`。
@@ -62,11 +64,22 @@ build 引用支持别名：`last`→`lastBuild`、`lastSuccessful`、`lastFailed
 |---|---|---|---|
 | `jk build ls <job>` | — | `GET /job/.../api/json?tree=builds[number,result,timestamp,duration,url,building]` | `--json` 原样；文本列 `number, result, timestamp(本地时间), duration(人性化), url`，building 中的 build result 显示 `BUILDING` |
 | `jk build show <job> <n\|alias>` | — | `GET /job/.../{ref}/api/json?tree=...,actions[parameters[name,value,_class],causes[shortDescription]],artifacts[...],changeSet[...]` | 结构化 Value：基本信息 + parameters + causes + artifacts + changes |
-| `jk build log <job> <n\|alias>` | `--full` | `GET /job/.../{ref}/logText/progressiveText?start=0` | 文本直接输出日志原文；`--json` 为 `{job, build, size, truncated, log}` |
+| `jk build log <job> <n\|alias>` | `--full`、`--follow`、`--wait-timeout`（默认 10m） | `GET /job/.../{ref}/logText/progressiveText?start=N` | 文本直接输出日志原文；`--json` 为 `{job, build, size, truncated, log}` |
+| `jk build stop <job> <n\|alias>` | — | `POST /job/.../{ref}/stop`（302 跳 build 页，自动跟随） | `{job, number, stopped: true}` + Message |
 
 - **参数值脱敏**：参数名匹配 `(?i)password|secret|token|key` 或参数 `_class` 为 PasswordParameter 时，值显示 `***`（空值保持空）；`--json` 同样脱敏。
 - `build log` 默认只保留末尾 **200 行**（全局 `--limit` 显式设置时覆盖该数值；`--limit 0` 或 `--full` 输出全部），被截断时首行标注 `... (showing last N lines, --full for all)`。
-- progressiveText 的 `start` 偏移 + `X-Text-Size`/`X-More-Data` 响应头结构已封装在 `fetchLog`，为后续 `--follow`（循环 `start=size` 轮询）铺路。
+- **--follow 输出模型**：先按上述规则输出当前 tail（`--full` 则先输出全量），然后从 `size` 偏移循环 `progressiveText?start=size` 轮询增量（间隔 1s，读 `X-Text-Size`/`X-More-Data`），直到日志完整（build 结束的 log 直接退出）。文本模式增量块到达即写 stdout（真正跟随）；`--json` 无法流式，收集全部增量后输出单个 envelope（`truncated=false`，log 为完整日志）。`--wait-timeout` 到期报 `TIMEOUT`（文本模式已流出的部分保留在 stdout）。
+
+### --wait 语义
+
+`jk job build <job> --wait` 的轮询流程：
+
+1. `POST build[WithParameters]` 返回 201 + `Location: /queue/item/{id}/`，解析出 queue id（Location 形态异常报 `QUERY_ERROR`，header 原值不入错误消息）。
+2. **waitQueue**：每 2s 轮询 `GET /queue/item/{id}/api/json?tree=executable[number,url],cancelled,why`，直到拿到 `executable.number`；`cancelled=true` 报 `QUERY_ERROR`（why 附进消息）。**queue item 404 不视为错误**：执行器空闲时 item 可能在首次轮询前（毫秒级）就已出队——这是常见路径而非边缘竞态。404 时回退到 `GET {jobPath}/api/json?tree=builds[number,queueId]{,20}`，在最近 build 记录里按 `queueId` 匹配我们的 queue id（build 记录中 queueId 为数字类型，统一转 int64 比较）找到对应 build 号；本轮找不到则继续轮询。
+3. **waitBuild**：每 1s 轮询 `GET {path}/{n}/api/json?tree=number,...,building`，直到 `building=false && result!=null`。
+
+退出码约定：`SUCCESS`/`UNSTABLE` → 0；`FAILURE`/`ABORTED`/其他 → `QUERY_ERROR`（退出码 5），经 `cli.RenderPartial`：文本模式先渲染构建汇总再非零退出，`--json` 失败 envelope 的 `data` 携带构建汇总。`--wait-timeout`（默认 10m，与单次 HTTP `--timeout` 解耦）到期报 `TIMEOUT`（hint 指向 `--wait-timeout`）。
 
 ### queue 组
 
@@ -83,15 +96,15 @@ build 引用支持别名：`last`→`lastBuild`、`lastSuccessful`、`lastFailed
 ### request
 
 ```
-jk request <method> <path> [--file <path|->]
+jk request <method> <path> [--file <path|->] [--content-type <mime>]
 ```
 
 原生请求透传（curl 语义）：
 
 - method 枚举 `GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS`（大小写不敏感）；path 必须以 `/` 开头，原样拼接实例 baseURL（如 `/job/my-job/api/json`）。
-- `--file` 提供请求体（`-` 读 stdin）；有 body 时默认 `Content-Type: application/json`。
+- `--file` 提供请求体（`-` 读 stdin）；有 body 时默认 `Content-Type: application/json`，`--content-type` 显式覆盖（如向 `/createItem` 提交 job 定义需要 `text/xml`）。
 - **完成的 HTTP 交换不论状态码都原样报告**：data 为 `{status, headers, body}`（body 按响应 Content-Type 解析为 JSON 值，否则字符串）；只有传输层失败（连接失败/超时）才产生错误。
-- 非 GET/HEAD 自动携带 CSRF crumb（见下节），写端点因此也可达——写操作命令化之前，这是触发构建等操作的官方通道（如 `jk request POST /job/my-job/build`）。
+- 非 GET/HEAD 自动携带 CSRF crumb（见下节），写端点因此也可达（建 job：`jk request POST "/createItem?name=x" --content-type text/xml --file config.xml`；删 job：`jk request POST /job/x/doDelete`）。
 - **readonly 连接仅允许 GET/HEAD**，其余方法报 `READONLY_VIOLATION`（退出码 5）。
 
 ## Crumb / CSRF
@@ -112,14 +125,17 @@ crumb 获取的其他失败不阻断真实请求——让真实请求自己的�
 | HTTP 404 | `QUERY_ERROR`（消息含 "not found"，hint 提示检查 job 全名 folder/sub/job 与 build 号/别名） | 5 |
 | 连接拒绝、无此主机 | `CONNECT_FAILED` | 3 |
 | 超时（客户端或 context deadline） | `TIMEOUT` | 3 |
+| `--wait` / `--follow` 轮询超 `--wait-timeout` | `TIMEOUT`（hint 指向 `--wait-timeout`） | 3 |
 | 其余非 2xx | `QUERY_ERROR`（body 截断 512 字符——Jenkins 错误页是 HTML，截断防刷屏） | 5 |
-| readonly 连接的写操作（request 非 GET/HEAD） | `READONLY_VIOLATION` | 5 |
+| `--wait` 构建终态为 FAILURE/ABORTED/其他 | `QUERY_ERROR`（`--json` envelope 的 data 携带构建汇总） | 5 |
+| `--wait` 时 queue item 被取消 | `QUERY_ERROR`（消息含 cancelled 与 why） | 5 |
+| readonly 连接的写操作（job build/stop/enable/disable、request 非 GET/HEAD） | `READONLY_VIOLATION` | 5 |
 | request 的非 2xx 完成交换 | 不报错（data 原样报告 status） | 0 |
 
 ## 已知限制
 
-- 写操作命令（触发/停止构建、enable/disable job）不在本期；用 `jk request` 透传。crumb 机制与 progressiveText 轮询结构已为 v2 预留。
-- `build log` 未提供 `--follow`；`fetchLog` 的 start/size/more 签名即 follow 的轮询原语。
 - `job ls` folder 递归深度上限 10。
-- 单次响应体上限 64MB（含大日志；超大日志用 tail/--limit 控制输出行数）。
+- 单次响应体上限 64MB（含大日志；超大日志用 tail/--limit 控制输出行数，`--follow` 文本模式流式输出不受行数限制）。
+- `--wait`/`--follow` 为客户端轮询（queue 2s / build 1s / log 1s 间隔），非 WebSocket/推送；轮询间隔不可配置。
+- 写操作守卫只有 readonly 连接（`READONLY_VIOLATION`），不设 `--yes` 确认（显式命令即意图）。
 - TLS 由 url scheme 决定，不支持自定义 CA / 跳过证书校验（后续迭代按需加）。

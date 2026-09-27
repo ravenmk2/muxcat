@@ -24,16 +24,23 @@ const maxFolderDepth = 10
 func newJobCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "job",
-		Short: "Inspect Jenkins jobs",
-		Long: `Inspect Jenkins jobs: list jobs of the root or a folder
-(folders are recursed into), or show one job's details and build
-parameter definitions. Jobs inside folders are addressed by full
-name (folder/sub/job).`,
+		Short: "Inspect and operate Jenkins jobs",
+		Long: `Inspect and operate Jenkins jobs: list jobs of the root or a
+folder (folders are recursed into), show one job's details and build
+parameter definitions, trigger a build (optionally waiting for the
+result), or enable/disable a job. Jobs inside folders are addressed
+by full name (folder/sub/job).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
 	}
-	c.AddCommand(newJobLsCmd(), newJobShowCmd())
+	c.AddCommand(
+		newJobLsCmd(),
+		newJobShowCmd(),
+		newJobBuildCmd(),
+		newJobToggleCmd("enable", true),
+		newJobToggleCmd("disable", false),
+	)
 	return c
 }
 
@@ -243,6 +250,172 @@ const jobShowTree = "displayName,fullName,description,url,buildable,color,concur
 	"healthReport[description,score],lastBuild[number,result,timestamp]," +
 	"lastSuccessfulBuild[number],lastFailedBuild[number]," +
 	"property[parameterDefinitions[name,type,defaultParameterValue[value],description]]"
+
+func newJobBuildCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "build <job>",
+		Short: "Trigger a build of a job (POST /job/.../build[WithParameters])",
+		Args:  cli.ExactArgs(1, "<job>", "job"),
+		Example: `  muxcat jenkins job build my-job
+  muxcat jenkins job build my-job --param ENV=uat --param TAG=v1.2.3
+  muxcat jenkins job build my-job --wait
+  muxcat jenkins job build team/backend/deploy --wait --wait-timeout 30m`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			start := time.Now()
+			name, conn, cl, _, err := openForCmd(cmd)
+			if err != nil {
+				return err
+			}
+			if conn.Readonly {
+				return readonlyErr("job build")
+			}
+			rawParams, _ := cmd.Flags().GetStringArray("param")
+			params, err := parseParams(rawParams)
+			if err != nil {
+				return err
+			}
+			job := args[0]
+			path := jobPath(job)
+			// Parameterized jobs reject a bare POST /build (400 "Nothing
+			// is submitted": Stapler expects a form), while
+			// buildWithParameters triggers them fine even with an empty
+			// query (defaults apply). Probe the job's property list to
+			// pick the endpoint instead of matching on error text; a
+			// probe failure (e.g. 404, job does not exist) surfaces as-is.
+			parameterized, err := jobParameterized(cmd.Context(), cl, path)
+			if err != nil {
+				return err
+			}
+			endpoint := path + "/build"
+			if parameterized || len(params) > 0 {
+				// --param on a non-parameterized job still goes to
+				// buildWithParameters: the server's 400 is the honest
+				// answer and surfaces unchanged.
+				endpoint = path + "/buildWithParameters"
+				if len(params) > 0 {
+					endpoint += "?" + params.Encode()
+				}
+			}
+			// A nil body still rides send(), so the crumb is attached.
+			resp, err := cl.do(cmd.Context(), "POST", endpoint, nil)
+			if err != nil {
+				return err
+			}
+			id, err := queueID(resp.headers["Location"])
+			if err != nil {
+				return err
+			}
+			if !cli.FlagBool(cmd, "wait") {
+				return cli.RenderResult(cmd, &output.Result{
+					Value: map[string]any{
+						"queued":    true,
+						"queue_id":  id,
+						"queue_url": resp.headers["Location"],
+					},
+					Message: fmt.Sprintf("queued build for %s (queue item %s)", job, id),
+				}, meta(name, start, false))
+			}
+
+			wt, err := waitTimeout(cmd)
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), wt)
+			defer cancel()
+			number, err := waitQueue(ctx, cl, path, id)
+			if err != nil {
+				return err
+			}
+			summary, err := waitBuild(ctx, cl, path, number)
+			if err != nil {
+				return err
+			}
+			value := map[string]any{
+				"job":       job,
+				"number":    summary["number"],
+				"result":    summary["result"],
+				"duration":  formatDuration(summary["duration"]),
+				"url":       summary["url"],
+				"timestamp": formatTS(summary["timestamp"]),
+			}
+			res := &output.Result{Value: textValue(value), JSONData: value, Syntax: "yaml"}
+			// SUCCESS/UNSTABLE exit 0; FAILURE/ABORTED (and anything else)
+			// report the summary but fail with QUERY_ERROR (exit 5).
+			if result := str(summary["result"]); result == "SUCCESS" || result == "UNSTABLE" {
+				return cli.RenderResult(cmd, res, meta(name, start, false))
+			}
+			return cli.RenderPartial(cmd, res, meta(name, start, false),
+				output.NewError(output.CodeQueryError,
+					fmt.Sprintf("build #%d finished with %s", number, str(summary["result"])),
+					fmt.Sprintf("inspect the log with muxcat jenkins build log %s %d", job, number)))
+		},
+	}
+	c.Flags().StringArray("param", nil, "build parameter as k=v (repeatable); switches to buildWithParameters")
+	c.Flags().Bool("wait", false, "wait for the build to finish and report its result")
+	addWaitTimeoutFlag(c)
+	return c
+}
+
+// newJobToggleCmd builds the enable/disable pair; enabled selects which.
+func newJobToggleCmd(verb string, enabled bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   verb + " <job>",
+		Short: strings.ToUpper(verb[:1]) + verb[1:] + " a job (POST /job/.../" + verb + ")",
+		Args:  cli.ExactArgs(1, "<job>", "job"),
+		Example: fmt.Sprintf(`  muxcat jenkins job %s my-job
+  muxcat jenkins job %s team/backend/deploy`, verb, verb),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			start := time.Now()
+			name, conn, cl, _, err := openForCmd(cmd)
+			if err != nil {
+				return err
+			}
+			if conn.Readonly {
+				return readonlyErr("job " + verb)
+			}
+			// Jenkins answers with a 302 to the job page; the http client
+			// follows it, so any non-2xx reaching here is a real failure.
+			if _, err := cl.do(cmd.Context(), "POST", jobPath(args[0])+"/"+verb, nil); err != nil {
+				return err
+			}
+			return cli.RenderResult(cmd, &output.Result{
+				Value:   map[string]any{"job": args[0], "enabled": enabled},
+				Message: fmt.Sprintf("%sd job %s", verb, args[0]),
+			}, meta(name, start, false))
+		},
+	}
+}
+
+// readonlyErr rejects a write command on a readonly connection.
+func readonlyErr(what string) *output.Error {
+	return output.NewError(output.CodeReadonlyViolation,
+		what+" is not allowed on a readonly connection",
+		"use a writable connection (-c), or recreate the connection without --readonly")
+}
+
+// jobParameterized probes whether a job declares build parameters
+// (multibranch branch jobs can be parameterized too; the same shape
+// applies).
+func jobParameterized(ctx context.Context, cl *client, path string) (bool, error) {
+	resp, err := cl.do(ctx, "GET", path+"/api/json?tree=property[parameterDefinitions[name]]", nil)
+	if err != nil {
+		return false, err
+	}
+	raw, err := decodeBody(resp.body)
+	if err != nil {
+		return false, err
+	}
+	m, _ := raw.(map[string]any)
+	props, _ := m["property"].([]any)
+	for _, item := range props {
+		if p, ok := item.(map[string]any); ok {
+			if defs, ok := p["parameterDefinitions"].([]any); ok && len(defs) > 0 {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
 
 // healthReport renders the health report as "description (score%)" entries.
 func healthReport(v any) []string {
