@@ -648,13 +648,13 @@ func TestConfigCRUDV2(t *testing.T) {
 	if !strings.Contains(out, "type") || !strings.Contains(out, "yaml") {
 		t.Fatalf("config ls should show the type column:\n%s", out)
 	}
-	// --dataId filters (blur).
-	out, err = runMuxcat(t, "nacos", "config", "ls", "--dataId", "app")
+	// --data-id filters (blur).
+	out, err = runMuxcat(t, "nacos", "config", "ls", "--data-id", "app")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, "app.yaml") || strings.Contains(out, "seed.yaml") {
-		t.Fatalf("config ls --dataId output unexpected:\n%s", out)
+		t.Fatalf("config ls --data-id output unexpected:\n%s", out)
 	}
 
 	// delete, then get 404s with the addressing hint.
@@ -747,7 +747,7 @@ func TestConfigGetTypeFallbackV2(t *testing.T) {
 	}
 	// ls on 2.x goes through the accurate search, so the type column is
 	// populated even though this fake (like a real 2.2.0) nulls it on blur.
-	out, err := runMuxcat(t, "nacos", "config", "ls", "--dataId", "application")
+	out, err := runMuxcat(t, "nacos", "config", "ls", "--data-id", "application")
 	if err != nil {
 		t.Fatal(err)
 	}

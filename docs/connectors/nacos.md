@@ -48,7 +48,7 @@ Nacos connector 通过 Nacos HTTP OpenAPI 接入，**同时支持 Nacos 2.x 与 
 - **namespace 语义差异**：2.x 的 public 命名空间 id 是空串（适配层把 `public` 映射为 `""`，展示时再映射回 `public`）；3.x 的 public id 就是 `public`，且 admin 面**必须显式传 namespaceId**（空值结果错误）。
 - **响应/错误体两套格式兼容**：Nacos envelope `{code,message,data}`（成功码为 0（v2/v3 envelope）或 200（部分 v1 console 端点），其余取 message 报错）与 Spring 标准错误 JSON `{timestamp,status,error,message,...}`（如 3.1.0 的 403）；`decodeData` 统一拆 envelope，`errDetail` 统一提取错误消息。响应体截断 512 字符、上限 64MB（同 jenkins）。
 - **实测应答差异**（以真实 2.2.0 / 2.5.1 / 3.1.0 / 3.2.4 校准）：3.x config get 的 envelope data 是**对象**（`{content, contentType, md5, ...}`，contentType 即服务端记录的配置格式，用于 `config get` 高亮与 `--json` 的 type 字段）而非 2.x 的裸内容串（2.x get 不带格式信息，格式按 dataId 后缀客户端推断，推断不出时再用 accurate 精确查询兜底取服务端 type）；3.x config 不存在时返回 **HTTP 200 + envelope code 20004**（映射为与 2.x 404 相同的 QUERY_ERROR not-found 形态）；3.x instance list 的 data 是**裸 hosts 数组**；3.x service list 的 data 是分页对象 `{totalCount, pageItems:[{name, groupName, ...}]}`；2.x `/v1/console/namespaces` 包 code:200 envelope。**blur 搜索是通配符语义**（`*`/`?`，裸词精确匹配）。
-- **列表搜索选型（2.x）**：老版本 2.x（实测 2.2.0）的 `search=blur` 列表项 **type 恒为 null**，`search=accurate` 正常返回 type（console 界面即用 accurate）。因此 2.x `config ls` 走 accurate，`--dataId` 的 blur 过滤改为客户端通配匹配（裸词包装为 `*word*` 的 substring 语义不变）；`config get` 的格式兜底同理走 accurate 精确查询（仅无后缀 dataId 触发，失败静默降级为不高亮）。3.x admin list 无此问题，仍用服务端 blur。
+- **列表搜索选型（2.x）**：老版本 2.x（实测 2.2.0）的 `search=blur` 列表项 **type 恒为 null**，`search=accurate` 正常返回 type（console 界面即用 accurate）。因此 2.x `config ls` 走 accurate，`--data-id` 的 blur 过滤改为客户端通配匹配（裸词包装为 `*word*` 的 substring 语义不变）；`config get` 的格式兜底同理走 accurate 精确查询（仅无后缀 dataId 触发，失败静默降级为不高亮）。3.x admin list 无此问题，仍用服务端 blur。
 - **认证重试**：已配置凭据时所有请求带 `Authorization: Bearer <token>`；收到 401/403 时重新登录并重试一次（token 过期/服务端重启）。错误密码两版都返回 403 + 误导性 "User not found!" 文案，**错误分类只看状态码不看文案**。
 
 ## 命令
@@ -71,7 +71,7 @@ Nacos connector 通过 Nacos HTTP OpenAPI 接入，**同时支持 Nacos 2.x 与 
 | 命令 | 参数 / flag | data 形状 |
 |---|---|---|
 | `nacos config get <dataId>` | `-g`、`--namespace`、`--no-highlight` | 文本模式裸输出内容（Bare），TTY 下按格式语法高亮（3.x 取服务端 contentType；2.x 按 dataId 后缀推断，推断不出再走 accurate 精确查询取服务端 type；`--no-highlight` 关闭；管道从不着色）；`--json` 为 `{dataId, group, namespace, type, content}` |
-| `nacos config ls` | `-g`（精确过滤）、`--dataId`（blur 过滤：裸词按 substring，支持 `*`/`?` 通配符；2.x 为客户端过滤，见"列表搜索选型"）、`--namespace`、`--limit` | 表格 dataId/group/type（type 为服务端记录的配置格式；TTY 下 DEFAULT_GROUP 置灰、type 按格式分色）；单页抓取（pageSize = limit，上限 500） |
+| `nacos config ls` | `-g`（精确过滤）、`--data-id`（blur 过滤：裸词按 substring，支持 `*`/`?` 通配符；2.x 为客户端过滤，见"列表搜索选型"）、`--namespace`、`--limit` | 表格 dataId/group/type（type 为服务端记录的配置格式；TTY 下 DEFAULT_GROUP 置灰、type 按格式分色）；单页抓取（pageSize = limit，上限 500） |
 | `nacos config publish <dataId>` | `--file <path\|->` 与 `--content <string>` 二选一（必填）、`--type`（text/json/yaml/...，空则由服务端按 dataId 后缀推断）、`-g`、`--namespace` | `{dataId, group, namespace, published: true}` + Message；readonly 守卫 |
 | `nacos config delete <dataId>` | `-g`、`--namespace` | `{dataId, group, namespace, deleted: true}` + Message；readonly 守卫 |
 | `nacos config watch <dataId>` | `-g`、`--namespace`、`--interval`（默认 5s，仅 3.x 生效） | 流式文本：先输出当前内容，内容变化时输出 `--- changed <ts> ---` + 新内容；Ctrl+C 优雅退出（码 0） |

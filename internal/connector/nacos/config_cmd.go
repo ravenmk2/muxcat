@@ -138,7 +138,7 @@ func newConfigLsCmd() *cobra.Command {
 		Short: "List configs (blur search) in the namespace",
 		Args:  cobra.NoArgs,
 		Example: `  muxcat nacos config ls
-  muxcat nacos config ls --dataId app --limit 20
+  muxcat nacos config ls --data-id app --limit 20
   muxcat nacos config ls -g BIZ_GROUP --namespace staging --json`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			start := time.Now()
@@ -156,7 +156,7 @@ func newConfigLsCmd() *cobra.Command {
 			if err := cl.ensureReady(cmd.Context()); err != nil {
 				return err
 			}
-			page, err := cl.api().configList(cmd.Context(), cli.FlagString(cmd, "dataId"), group, namespace, 1, pageSize)
+			page, err := cl.api().configList(cmd.Context(), cli.FlagString(cmd, "data-id"), group, namespace, 1, pageSize)
 			if err != nil {
 				return err
 			}
@@ -173,7 +173,7 @@ func newConfigLsCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringP("group", "g", "", "filter by group (exact; empty matches all groups)")
-	c.Flags().String("dataId", "", "filter by dataId (blur match; a bare word matches as a substring, * and ? wildcards supported)")
+	c.Flags().String("data-id", "", "filter by dataId (blur match; a bare word matches as a substring, * and ? wildcards supported)")
 	addNamespaceFlag(c)
 	return c
 }
