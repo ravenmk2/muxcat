@@ -460,6 +460,36 @@ func TestFormatCellColor(t *testing.T) {
 	}
 }
 
+func TestFormatColumnHook(t *testing.T) {
+	gray := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	cs := &CellStyle{
+		ColumnStyle: func(column string, v any, color bool) (string, bool) {
+			if color && column == "group" && v == "DEFAULT_GROUP" {
+				return gray.Render("DEFAULT_GROUP"), true
+			}
+			return "", false
+		},
+	}
+
+	// The hook takes over on a color TTY and emits ANSI.
+	if got := cs.FormatColumn("group", "DEFAULT_GROUP", "", true); !strings.Contains(got, "\x1b[") {
+		t.Fatalf("hooked cell should emit ANSI escapes, got %q", got)
+	}
+	// Color off: the hook declines, plain category formatting applies.
+	if got := cs.FormatColumn("group", "DEFAULT_GROUP", "", false); got != "DEFAULT_GROUP" {
+		t.Fatalf("color-off hooked column = %q, want plain", got)
+	}
+	// An unrecognized column falls through even with color on.
+	if got := cs.FormatColumn("name", "x", "", true); got != "x" {
+		t.Fatalf("unhooked column = %q, want plain", got)
+	}
+	// A nil receiver yields the legacy default.
+	var nilStyle *CellStyle
+	if got := nilStyle.FormatColumn("group", nil, "", true); got != "" {
+		t.Fatalf("nil-receiver FormatColumn = %q, want empty", got)
+	}
+}
+
 func TestIsBinaryType(t *testing.T) {
 	for _, typ := range []string{"BINARY", "varbinary", "TinyBlob", "BLOB", "MEDIUMBLOB", "LONGBLOB", "GEOMETRY", "BIT"} {
 		if !IsBinaryType(typ) {

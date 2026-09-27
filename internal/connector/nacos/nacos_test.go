@@ -735,6 +735,40 @@ func TestFormatHelpers(t *testing.T) {
 	}
 }
 
+func TestCellStyleColors(t *testing.T) {
+	// Color off: everything renders plain.
+	if got := cellStyle.FormatColumn("group", "DEFAULT_GROUP", "", false); got != "DEFAULT_GROUP" {
+		t.Fatalf("color-off group = %q, want plain", got)
+	}
+	// The default group fades (ANSI present), a named group stays plain.
+	def := cellStyle.FormatColumn("group", "DEFAULT_GROUP", "", true)
+	if !strings.Contains(def, "\x1b[") {
+		t.Fatalf("DEFAULT_GROUP should be dimmed, got %q", def)
+	}
+	if got := cellStyle.FormatColumn("group", "BIZ_GROUP", "", true); got != "BIZ_GROUP" {
+		t.Fatalf("named group should stay plain, got %q", got)
+	}
+	// Types get per-format colors.
+	yamlCell := cellStyle.FormatColumn("type", "yaml", "", true)
+	jsonCell := cellStyle.FormatColumn("type", "json", "", true)
+	if !strings.Contains(yamlCell, "\x1b[") || yamlCell == jsonCell {
+		t.Fatalf("type colors should differ per format: yaml=%q json=%q", yamlCell, jsonCell)
+	}
+	// Boolean flags go green/red.
+	up := cellStyle.FormatColumn("healthy", true, "", true)
+	down := cellStyle.FormatColumn("healthy", false, "", true)
+	if up == down || !strings.Contains(up, "\x1b[") || !strings.Contains(down, "\x1b[") {
+		t.Fatalf("healthy colors should differ: true=%q false=%q", up, down)
+	}
+	if got := cellStyle.FormatColumn("enabled", false, "", true); !strings.Contains(got, "\x1b[") {
+		t.Fatalf("enabled=false should be colored, got %q", got)
+	}
+	// Unrelated columns stay plain even with color on (JSON/TSV safety).
+	if got := cellStyle.FormatColumn("ip", "10.0.0.1", "", true); got != "10.0.0.1" {
+		t.Fatalf("unstyled column = %q, want plain", got)
+	}
+}
+
 func TestServiceInstanceNamespace(t *testing.T) {
 	setupEnv(t)
 

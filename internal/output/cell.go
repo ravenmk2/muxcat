@@ -20,6 +20,11 @@ type CellStyle struct {
 	DateLayout string       // Go layout for time.Time on DATE columns, e.g. "2006-01-02"
 	TimeLayout string       // Go layout for other time.Time, e.g. "2006-01-02 15:04:05.999999"
 	Palette    *CellPalette // per-category lipgloss styles; nil = no cell coloring
+	// ColumnStyle optionally customizes the cells of a named column
+	// (value-based coloring for semantic columns, e.g. a status flag).
+	// It returns the rendered cell and true to take over, or ("", false)
+	// to fall through to the category-based formatting.
+	ColumnStyle func(column string, v any, color bool) (string, bool)
 }
 
 // CellPalette holds the per-category styles applied when color is on.
@@ -68,6 +73,22 @@ func (s *CellStyle) FormatCell(v any, dbType string, color bool) string {
 	default:
 		return fmt.Sprint(val)
 	}
+}
+
+// FormatColumn renders a cell of the named column: the ColumnStyle hook
+// gets first refusal, then the value-category formatting of FormatCell.
+// A nil receiver yields the legacy default.
+func (s *CellStyle) FormatColumn(column string, v any, dbType string, color bool) string {
+	if s == nil {
+		return legacyCell(v)
+	}
+	if color && s.ColumnStyle != nil {
+		forceColorProfile()
+		if out, ok := s.ColumnStyle(column, v, color); ok {
+			return out
+		}
+	}
+	return s.FormatCell(v, dbType, color)
 }
 
 // legacyCell is the default cell formatting without an attached CellStyle.

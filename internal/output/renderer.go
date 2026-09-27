@@ -88,7 +88,11 @@ func (r *Result) columnType(j int) string {
 // formatCell formats a tabular cell via the attached CellStyle, or the
 // legacy default when none is attached (nil receiver).
 func (r *Result) formatCell(v any, j int, color bool) string {
-	return r.CellStyle.FormatCell(v, r.columnType(j), color)
+	column := ""
+	if j < len(r.Columns) {
+		column = r.Columns[j]
+	}
+	return r.CellStyle.FormatColumn(column, v, r.columnType(j), color)
 }
 
 // cellString formats an untyped non-tabular value (legacy default).

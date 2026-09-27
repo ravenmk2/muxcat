@@ -61,8 +61,9 @@ func newServiceLsCmd() *cobra.Command {
 			}
 			rows, truncated := applyLimit(rows, limit)
 			return cli.RenderResult(cmd, &output.Result{
-				Columns: []string{"service", "group"},
-				Rows:    rows,
+				Columns:   []string{"service", "group"},
+				Rows:      rows,
+				CellStyle: cellStyle,
 			}, meta(name, start, truncated))
 		},
 	}
@@ -145,8 +146,9 @@ func newInstanceLsCmd() *cobra.Command {
 			}
 			rows, truncated := applyLimit(rows, cli.FlagLimit(cmd))
 			return cli.RenderResult(cmd, &output.Result{
-				Columns: []string{"ip", "port", "weight", "healthy", "enabled"},
-				Rows:    rows,
+				Columns:   []string{"ip", "port", "weight", "healthy", "enabled"},
+				Rows:      rows,
+				CellStyle: cellStyle,
 			}, meta(name, start, truncated))
 		},
 	}

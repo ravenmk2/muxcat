@@ -70,7 +70,7 @@ Nacos connector 通过 Nacos HTTP OpenAPI 接入，**同时支持 Nacos 2.x 与 
 | 命令 | 参数 / flag | data 形状 |
 |---|---|---|
 | `nacos config get <dataId>` | `-g`、`--namespace`、`--no-highlight` | 文本模式裸输出内容（Bare），TTY 下按格式语法高亮（3.x 取服务端 contentType；2.x 按 dataId 后缀推断，推断不出再走 accurate 精确查询取服务端 type；`--no-highlight` 关闭；管道从不着色）；`--json` 为 `{dataId, group, namespace, type, content}` |
-| `nacos config ls` | `-g`（精确过滤）、`--dataId`（blur 过滤：裸词按 substring，支持 `*`/`?` 通配符；2.x 为客户端过滤，见"列表搜索选型"）、`--namespace`、`--limit` | 表格 dataId/group/type（type 为服务端记录的配置格式）；单页抓取（pageSize = limit，上限 500） |
+| `nacos config ls` | `-g`（精确过滤）、`--dataId`（blur 过滤：裸词按 substring，支持 `*`/`?` 通配符；2.x 为客户端过滤，见"列表搜索选型"）、`--namespace`、`--limit` | 表格 dataId/group/type（type 为服务端记录的配置格式；TTY 下 DEFAULT_GROUP 置灰、type 按格式分色）；单页抓取（pageSize = limit，上限 500） |
 | `nacos config publish <dataId>` | `--file <path\|->` 与 `--content <string>` 二选一（必填）、`--type`（text/json/yaml/...，空则由服务端按 dataId 后缀推断）、`-g`、`--namespace` | `{dataId, group, namespace, published: true}` + Message；readonly 守卫 |
 | `nacos config delete <dataId>` | `-g`、`--namespace` | `{dataId, group, namespace, deleted: true}` + Message；readonly 守卫 |
 | `nacos config watch <dataId>` | `-g`、`--namespace`、`--interval`（默认 5s，仅 3.x 生效） | 流式文本：先输出当前内容，内容变化时输出 `--- changed <ts> ---` + 新内容；Ctrl+C 优雅退出（码 0） |
@@ -81,9 +81,9 @@ Nacos connector 通过 Nacos HTTP OpenAPI 接入，**同时支持 Nacos 2.x 与 
 
 | 命令 | 说明 |
 |---|---|
-| `nacos service ls [--limit]` | 表格 service/group（2.x 的列表应答只有名字，group 列留空） |
+| `nacos service ls [--limit]` | 表格 service/group（2.x 的列表应答只有名字，group 列留空；TTY 下 DEFAULT_GROUP 置灰） |
 | `nacos service show <serviceName> [-g] [--namespace]` | 服务端 detail 原样（文本模式 pretty JSON + 语法高亮） |
-| `nacos instance ls <serviceName> [-g] [--namespace]` | 表格 ip/port/weight/healthy/enabled |
+| `nacos instance ls <serviceName> [-g] [--namespace]` | 表格 ip/port/weight/healthy/enabled（TTY 下 healthy/enabled 绿/红着色） |
 | `nacos namespace ls` | 表格 namespace/showName/quota/configCount（2.x 空 id 显示为 public） |
 
 ## 错误映射

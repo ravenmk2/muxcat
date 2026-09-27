@@ -166,8 +166,9 @@ func newConfigLsCmd() *cobra.Command {
 			}
 			rows, truncated := applyLimit(rows, limit)
 			return cli.RenderResult(cmd, &output.Result{
-				Columns: []string{"dataId", "group", "type"},
-				Rows:    rows,
+				Columns:   []string{"dataId", "group", "type"},
+				Rows:      rows,
+				CellStyle: cellStyle,
 			}, meta(name, start, truncated))
 		},
 	}
