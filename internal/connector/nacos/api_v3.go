@@ -231,3 +231,30 @@ func (a apiV3) namespaceList(ctx context.Context) ([]namespaceInfo, error) {
 	}
 	return out, nil
 }
+
+// namespaceCreate creates a namespace via the admin API (NamespaceForm:
+// namespaceId/namespaceName/namespaceDesc).
+func (a apiV3) namespaceCreate(ctx context.Context, id, name, desc string) error {
+	r, err := a.c.send(ctx, http.MethodPost, "/nacos/v3/admin/core/namespace", url.Values{
+		"namespaceId":   {id},
+		"namespaceName": {name},
+		"namespaceDesc": {desc},
+	}, nil, nil)
+	if err != nil {
+		return err
+	}
+	return writeOK(r.body)
+}
+
+// namespaceUpdate edits a namespace's show name/description.
+func (a apiV3) namespaceUpdate(ctx context.Context, id, name, desc string) error {
+	r, err := a.c.send(ctx, http.MethodPut, "/nacos/v3/admin/core/namespace", url.Values{
+		"namespaceId":   {id},
+		"namespaceName": {name},
+		"namespaceDesc": {desc},
+	}, nil, nil)
+	if err != nil {
+		return err
+	}
+	return writeOK(r.body)
+}

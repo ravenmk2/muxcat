@@ -41,6 +41,7 @@ Nacos connector 通过 Nacos HTTP OpenAPI 接入，**同时支持 Nacos 2.x 与 
 | service ls / show | `GET /nacos/v1/ns/service/list`、`GET /nacos/v1/ns/service` | `GET /nacos/v3/admin/ns/service/list`、`GET /nacos/v3/admin/ns/service` |
 | instance ls | `GET /nacos/v1/ns/instance/list` | `GET /nacos/v3/client/ns/instance/list` |
 | namespace ls | `GET /nacos/v1/console/namespaces` | `GET /nacos/v3/admin/core/namespace/list` |
+| namespace create/update | `POST\|PUT /nacos/v1/console/namespaces`（create 参数 `customNamespaceId`/`namespaceName`/`namespaceDesc`，update 参数 `namespace`/`namespaceShowName`/`namespaceDesc`） | `POST\|PUT /nacos/v3/admin/core/namespace`（统一 `namespaceId`/`namespaceName`/`namespaceDesc`） |
 | login | `POST /nacos/v1/auth/login` | `POST /nacos/v3/auth/user/login` |
 
 - **参数名差异**：3.x 用 `groupName`/`namespaceId`（传 2.x 的 `group` 会 400）；2.x 用 `dataId`/`group`/`namespaceId`（v1 为 `tenant`）。3.x 一律走 server 端口，不用 console 端口 API。
@@ -79,12 +80,16 @@ Nacos connector 通过 Nacos HTTP OpenAPI 接入，**同时支持 Nacos 2.x 与 
 
 ### service / instance / namespace 组
 
+namespace 组有别名 `ns`（如 `muxcat nacos ns ls`）。
+
 | 命令 | 说明 |
 |---|---|
 | `nacos service ls [--limit]` | 表格 service/group（2.x 的列表应答只有名字，group 列留空；TTY 下 DEFAULT_GROUP 置灰） |
 | `nacos service show <serviceName> [-g] [--namespace]` | 服务端 detail 原样（文本模式 pretty JSON + 语法高亮） |
 | `nacos instance ls <serviceName> [-g] [--namespace]` | 表格 ip/port/weight/healthy/enabled（TTY 下 healthy/enabled 绿/红着色） |
 | `nacos namespace ls` | 表格 namespace/showName/quota/configCount（2.x 空 id 显示为 public） |
+| `nacos namespace create <namespaceId> [--name 显示名] [--desc 描述]` | 创建命名空间；id 即数据命令 `--namespace` 的寻址键，`--name` 缺省等于 id；readonly 守卫 |
+| `nacos namespace update <namespaceId> [--name 新名] [--desc 新描述]` | 更新命名空间；服务端每次更新都要求显示名，`--name` 缺省时自动沿用当前值；readonly 守卫 |
 
 ## 错误映射
 

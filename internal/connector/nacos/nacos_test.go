@@ -410,18 +410,62 @@ func newNcServer(t *testing.T, flavor int) *ncServer {
 		{"namespace": "", "namespaceShowName": "public", "quota": 200, "configCount": 1},
 		{"namespace": "staging", "namespaceShowName": "staging", "quota": 200, "configCount": 3},
 	}
+	updateNamespace := func(id, name string) bool {
+		for i, ns := range namespaces {
+			if ns["namespace"] == id {
+				namespaces[i]["namespaceShowName"] = name
+				return true
+			}
+		}
+		return false
+	}
 	mux.HandleFunc("/nacos/v1/console/namespaces", func(w http.ResponseWriter, r *http.Request) {
 		if !requireAuth(w, r) {
 			return
 		}
-		// 2.x wraps the console namespaces answer in a code:200 envelope.
-		writeJSON(w, map[string]any{"code": 200, "message": nil, "data": namespaces})
+		switch r.Method {
+		case http.MethodGet:
+			// 2.x wraps the console namespaces answer in a code:200 envelope.
+			writeJSON(w, map[string]any{"code": 200, "message": nil, "data": namespaces})
+		case http.MethodPost:
+			_ = r.ParseForm()
+			namespaces = append(namespaces, map[string]any{
+				"namespace": r.Form.Get("customNamespaceId"), "namespaceShowName": r.Form.Get("namespaceName"),
+				"quota": 200, "configCount": 0,
+			})
+			_, _ = w.Write([]byte("true"))
+		case http.MethodPut:
+			_ = r.ParseForm()
+			ok := updateNamespace(r.Form.Get("namespace"), r.Form.Get("namespaceShowName"))
+			if ok {
+				_, _ = w.Write([]byte("true"))
+			} else {
+				_, _ = w.Write([]byte("false"))
+			}
+		}
 	})
 	mux.HandleFunc("/nacos/v3/admin/core/namespace/list", func(w http.ResponseWriter, r *http.Request) {
 		if !requireAuth(w, r) {
 			return
 		}
 		writeJSON(w, map[string]any{"code": 0, "message": "success", "data": namespaces})
+	})
+	mux.HandleFunc("/nacos/v3/admin/core/namespace", func(w http.ResponseWriter, r *http.Request) {
+		if !requireAuth(w, r) {
+			return
+		}
+		_ = r.ParseForm()
+		switch r.Method {
+		case http.MethodPost:
+			namespaces = append(namespaces, map[string]any{
+				"namespace": r.Form.Get("namespaceId"), "namespaceShowName": r.Form.Get("namespaceName"),
+				"quota": 200, "configCount": 0,
+			})
+			writeJSON(w, map[string]any{"code": 0, "message": "success", "data": true})
+		case http.MethodPut:
+			ok := updateNamespace(r.Form.Get("namespaceId"), r.Form.Get("namespaceName"))
+			writeJSON(w, map[string]any{"code": 0, "message": "success", "data": ok})
+		}
 	})
 	mux.HandleFunc("/nacos/v1/console/server/state", func(w http.ResponseWriter, r *http.Request) {
 		if !requireAuth(w, r) {
@@ -871,6 +915,43 @@ func TestNamespaceNsAlias(t *testing.T) {
 	}
 }
 
+func TestNamespaceCreateUpdate(t *testing.T) {
+	for _, flavor := range []int{2, 3} {
+		t.Run(fmt.Sprintf("v%d", flavor), func(t *testing.T) {
+			setupEnv(t)
+			s := newNcServer(t, flavor)
+			s.addConn(t, "local", "--username", testUser, "--password", testPassword)
+
+			// create; --name defaults to the id.
+			if _, err := runMuxcat(t, "nacos", "namespace", "create", "testing", "--desc", "ci"); err != nil {
+				t.Fatalf("create failed: %v", err)
+			}
+			// the ns group alias works.
+			out, err := runMuxcat(t, "nacos", "ns", "ls")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out, "testing") {
+				t.Fatalf("ls should show the new namespace:\n%s", out)
+			}
+			// Rename, then a desc-only update reuses the current show name.
+			if _, err := runMuxcat(t, "nacos", "ns", "update", "testing", "--name", "Testing 2"); err != nil {
+				t.Fatalf("update failed: %v", err)
+			}
+			if _, err := runMuxcat(t, "nacos", "ns", "update", "testing", "--desc", "done"); err != nil {
+				t.Fatalf("desc-only update failed: %v", err)
+			}
+			out, err = runMuxcat(t, "nacos", "namespace", "ls")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out, "Testing 2") {
+				t.Fatalf("ls should show the renamed namespace:\n%s", out)
+			}
+		})
+	}
+}
+
 func TestWriteReadonly(t *testing.T) {
 	setupEnv(t)
 	s := newNcServer(t, 2)
@@ -879,6 +960,8 @@ func TestWriteReadonly(t *testing.T) {
 	for _, args := range [][]string{
 		{"nacos", "config", "publish", "x.yaml", "--content", "a: b"},
 		{"nacos", "config", "delete", "seed.yaml"},
+		{"nacos", "namespace", "create", "testing"},
+		{"nacos", "namespace", "update", "staging", "--name", "y"},
 	} {
 		_, err := runMuxcat(t, args...)
 		if e := output.ToError(err); e.Code != output.CodeReadonlyViolation {

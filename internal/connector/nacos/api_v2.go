@@ -336,6 +336,36 @@ func (a apiV2) namespaceList(ctx context.Context) ([]namespaceInfo, error) {
 	return out, nil
 }
 
+// namespaceCreate creates a namespace: a blank customNamespaceId lets the
+// server generate a UUID; the connector always passes an explicit id.
+// The show name must satisfy the server's pattern (a failure comes back
+// as a bare false).
+func (a apiV2) namespaceCreate(ctx context.Context, id, name, desc string) error {
+	r, err := a.c.send(ctx, http.MethodPost, "/nacos/v1/console/namespaces", url.Values{
+		"customNamespaceId": {id},
+		"namespaceName":     {name},
+		"namespaceDesc":     {desc},
+	}, nil, nil)
+	if err != nil {
+		return err
+	}
+	return writeOK(r.body)
+}
+
+// namespaceUpdate edits a namespace's show name/description. The 2.x
+// public namespace is addressed by its real (empty) id.
+func (a apiV2) namespaceUpdate(ctx context.Context, id, name, desc string) error {
+	r, err := a.c.send(ctx, http.MethodPut, "/nacos/v1/console/namespaces", url.Values{
+		"namespace":         {ns2(id)},
+		"namespaceShowName": {name},
+		"namespaceDesc":     {desc},
+	}, nil, nil)
+	if err != nil {
+		return err
+	}
+	return writeOK(r.body)
+}
+
 // itemsOf extracts the page-items array of a listing response, tolerating
 // both the 2.x (pageItems) and 3.x (pageItems/data) shapes.
 func itemsOf(m map[string]any) []map[string]any {

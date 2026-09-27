@@ -402,6 +402,8 @@ type api interface {
 	serviceDetail(ctx context.Context, service, group, namespace string) (any, error)
 	instanceList(ctx context.Context, service, group, namespace string) ([]instanceInfo, error)
 	namespaceList(ctx context.Context) ([]namespaceInfo, error)
+	namespaceCreate(ctx context.Context, id, name, desc string) error
+	namespaceUpdate(ctx context.Context, id, name, desc string) error
 }
 
 func (c *client) api() api {
