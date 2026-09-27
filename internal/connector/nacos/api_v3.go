@@ -18,7 +18,7 @@ import (
 // — the admin side misbehaves on an empty value.
 type apiV3 struct{ c *client }
 
-func (a apiV3) configGet(ctx context.Context, dataID, group, namespace string) (string, error) {
+func (a apiV3) configGet(ctx context.Context, dataID, group, namespace string) (string, string, error) {
 	// The client-facing read endpoint works anonymously.
 	r, err := a.c.send(ctx, http.MethodGet, "/nacos/v3/client/cs/config", url.Values{
 		"dataId":      {dataID},
@@ -26,28 +26,28 @@ func (a apiV3) configGet(ctx context.Context, dataID, group, namespace string) (
 		"namespaceId": {namespace},
 	}, nil, nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	v, err := decodeData(r.body)
 	if err != nil {
 		// A missing config is HTTP 200 with envelope code 20004 — map it
 		// to the same not-found shape as the 2.x 404.
 		if msg := output.ToError(err).Message; strings.Contains(msg, "20004") || strings.Contains(msg, "resource not found") {
-			return "", configNotFound(dataID, group, namespace)
+			return "", "", configNotFound(dataID, group, namespace)
 		}
-		return "", err
+		return "", "", err
 	}
-	// The 3.x envelope data is an object carrying the content (not a bare
-	// string like 2.x).
+	// The 3.x envelope data is an object carrying the content and its
+	// server-reported format (not a bare string like 2.x).
 	switch d := v.(type) {
 	case string:
-		return d, nil
+		return d, "", nil
 	case map[string]any:
 		if s, ok := d["content"].(string); ok {
-			return s, nil
+			return s, strOf(d, "contentType", "type"), nil
 		}
 	}
-	return "", output.NewError(output.CodeQueryError,
+	return "", "", output.NewError(output.CodeQueryError,
 		"unexpected config get response: "+truncate(string(r.body), 512), "")
 }
 
@@ -115,6 +115,7 @@ func (a apiV3) configList(ctx context.Context, dataID, group, namespace string, 
 			DataID:    strOf(it, "dataId"),
 			Group:     strOf(it, "groupName", "group"),
 			Namespace: strOf(it, "namespaceId", "namespace", "tenant"),
+			Type:      strOf(it, "type"),
 		})
 	}
 	return page, nil

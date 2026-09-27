@@ -386,9 +386,11 @@ func decodeData(body []byte) (any, error) {
 }
 
 // api is the version-adapted Nacos API surface; the command layer never
-// branches on the server major version.
+// branches on the server major version. configGet returns the content plus
+// the server-reported format ("" when the API generation does not carry
+// it, e.g. 2.x).
 type api interface {
-	configGet(ctx context.Context, dataID, group, namespace string) (string, error)
+	configGet(ctx context.Context, dataID, group, namespace string) (content, format string, err error)
 	configPublish(ctx context.Context, dataID, group, namespace, content, contentType string) error
 	configDelete(ctx context.Context, dataID, group, namespace string) error
 	configList(ctx context.Context, dataID, group, namespace string, pageNo, pageSize int) (*configPage, error)
@@ -410,6 +412,7 @@ type configItem struct {
 	DataID    string
 	Group     string
 	Namespace string
+	Type      string
 }
 
 type configPage struct {

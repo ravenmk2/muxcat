@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -45,9 +47,15 @@ func newConfigGetCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "get <dataId>",
 		Short: "Get a config's content",
-		Args:  cli.ExactArgs(1, "<dataId>", "dataId"),
+		Long: `Get a config's content. Text output is the bare content,
+syntax-highlighted on a TTY: the format reported by a 3.x server
+wins, otherwise it is inferred from the dataId suffix (.yaml,
+.json, ...). --no-highlight disables the coloring; pipes are
+never colored.`,
+		Args: cli.ExactArgs(1, "<dataId>", "dataId"),
 		Example: `  muxcat nacos config get app.yaml
   muxcat nacos config get app.yaml -g BIZ_GROUP --namespace staging
+  muxcat nacos config get app.yaml --no-highlight
   muxcat nacos config get app.yaml --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
@@ -61,19 +69,62 @@ func newConfigGetCmd() *cobra.Command {
 			if err := cl.ensureReady(cmd.Context()); err != nil {
 				return err
 			}
-			content, err := cl.api().configGet(cmd.Context(), dataID, group, namespace)
+			content, format, err := cl.api().configGet(cmd.Context(), dataID, group, namespace)
 			if err != nil {
 				return err
+			}
+			if format == "" {
+				format = inferFormat(dataID)
+			}
+			lexer := ""
+			if !cli.FlagBool(cmd, "no-highlight") {
+				lexer = highlightLexer(format)
 			}
 			return cli.RenderResult(cmd, &output.Result{
 				Value:    map[string]any{"content": content},
 				Bare:     true,
-				JSONData: map[string]any{"dataId": dataID, "group": group, "namespace": namespace, "content": content},
+				Syntax:   lexer,
+				JSONData: map[string]any{"dataId": dataID, "group": group, "namespace": namespace, "type": format, "content": content},
 			}, meta(name, start, false))
 		},
 	}
 	addAddressFlags(c)
+	c.Flags().Bool("no-highlight", false, "disable syntax highlighting of the content (TTY only; pipes are never highlighted)")
 	return c
+}
+
+// inferFormat guesses a config's format from the dataId suffix, matching
+// the set of types Nacos infers on publish.
+func inferFormat(dataID string) string {
+	switch strings.ToLower(filepath.Ext(dataID)) {
+	case ".yaml", ".yml":
+		return "yaml"
+	case ".json":
+		return "json"
+	case ".xml":
+		return "xml"
+	case ".html", ".htm":
+		return "html"
+	case ".properties", ".props":
+		return "properties"
+	case ".toml":
+		return "toml"
+	case ".txt", ".text", ".log":
+		return "text"
+	}
+	return ""
+}
+
+// highlightLexer maps a Nacos config format to a chroma lexer name; ""
+// means no highlighting.
+func highlightLexer(format string) string {
+	switch format {
+	case "json", "yaml", "xml", "html", "toml":
+		return format
+	case "properties":
+		return "ini"
+	}
+	return ""
 }
 
 func newConfigLsCmd() *cobra.Command {
@@ -104,22 +155,13 @@ func newConfigLsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			columns := []string{"dataId", "group"}
-			showNS := namespace != "public"
-			if showNS {
-				columns = append(columns, "namespace")
-			}
 			rows := make([][]any, 0, len(page.Items))
 			for _, it := range page.Items {
-				row := []any{it.DataID, it.Group}
-				if showNS {
-					row = append(row, it.Namespace)
-				}
-				rows = append(rows, row)
+				rows = append(rows, []any{it.DataID, it.Group, it.Type})
 			}
 			rows, truncated := applyLimit(rows, limit)
 			return cli.RenderResult(cmd, &output.Result{
-				Columns: columns,
+				Columns: []string{"dataId", "group", "type"},
 				Rows:    rows,
 			}, meta(name, start, truncated))
 		},

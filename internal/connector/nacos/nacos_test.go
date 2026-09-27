@@ -78,6 +78,7 @@ type ncServer struct {
 	flavor        int
 	token         string
 	configs       map[string]string // dataId\x02group\x02ns -> content
+	types         map[string]string // dataId\x02group\x02ns -> config type
 	lastAuth      string
 	published     map[string]int
 	deleted       map[string]int
@@ -115,11 +116,25 @@ func wildcardMatch(pattern, s string) bool {
 	return true
 }
 
+// fakeConfigType mirrors the server's type resolution on publish: the
+// explicit type wins, otherwise it is inferred from the dataId suffix,
+// defaulting to text.
+func fakeConfigType(explicit, dataID string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if f := inferFormat(dataID); f != "" {
+		return f
+	}
+	return "text"
+}
+
 func newNcServer(t *testing.T, flavor int) *ncServer {
 	t.Helper()
 	s := &ncServer{
 		flavor:    flavor,
 		configs:   map[string]string{},
+		types:     map[string]string{},
 		published: map[string]int{},
 		deleted:   map[string]int{},
 	}
@@ -129,6 +144,7 @@ func newNcServer(t *testing.T, flavor int) *ncServer {
 		s.token = v2Token
 	}
 	s.configs[configKey("seed.yaml", "DEFAULT_GROUP", "public")] = "seed: true"
+	s.types[configKey("seed.yaml", "DEFAULT_GROUP", "public")] = "yaml"
 
 	requireAuth := func(w http.ResponseWriter, r *http.Request) bool {
 		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -208,12 +224,14 @@ func newNcServer(t *testing.T, flavor int) *ncServer {
 		case http.MethodPost:
 			s.mu.Lock()
 			s.configs[configKey(dataID, group, ns2Display(ns))] = r.Form.Get("content")
+			s.types[configKey(dataID, group, ns2Display(ns))] = fakeConfigType(r.Form.Get("type"), dataID)
 			s.published[configKey(dataID, group, ns2Display(ns))]++
 			s.mu.Unlock()
 			writeJSON(w, map[string]any{"code": 0, "message": "success", "data": true})
 		case http.MethodDelete:
 			s.mu.Lock()
 			delete(s.configs, configKey(dataID, group, ns2Display(ns)))
+			delete(s.types, configKey(dataID, group, ns2Display(ns)))
 			s.deleted[configKey(dataID, group, ns2Display(ns))]++
 			s.mu.Unlock()
 			writeJSON(w, map[string]any{"code": 0, "message": "success", "data": true})
@@ -227,13 +245,18 @@ func newNcServer(t *testing.T, flavor int) *ncServer {
 		}
 		// 3.x: data is an object carrying the content; a missing config is
 		// HTTP 200 with envelope code 20004.
-		content, ok := s.configs[configKey(q.Get("dataId"), q.Get("groupName"), q.Get("namespaceId"))]
+		key := configKey(q.Get("dataId"), q.Get("groupName"), q.Get("namespaceId"))
+		content, ok := s.configs[key]
 		if !ok {
 			writeJSON(w, map[string]any{"code": 20004, "message": "resource not found", "data": nil})
 			return
 		}
+		ctype := s.types[key]
+		if ctype == "" {
+			ctype = "text"
+		}
 		writeJSON(w, map[string]any{"code": 0, "message": "success", "data": map[string]any{
-			"resultCode": 200, "errorCode": 0, "content": content, "contentType": "text",
+			"resultCode": 200, "errorCode": 0, "content": content, "contentType": ctype,
 		}})
 	})
 	mux.HandleFunc("/nacos/v3/admin/cs/config", func(w http.ResponseWriter, r *http.Request) {
@@ -250,12 +273,14 @@ func newNcServer(t *testing.T, flavor int) *ncServer {
 		case http.MethodPost:
 			s.mu.Lock()
 			s.configs[configKey(dataID, group, ns)] = r.Form.Get("content")
+			s.types[configKey(dataID, group, ns)] = fakeConfigType(r.Form.Get("type"), dataID)
 			s.published[configKey(dataID, group, ns)]++
 			s.mu.Unlock()
 			writeJSON(w, map[string]any{"code": 0, "message": "success", "data": true})
 		case http.MethodDelete:
 			s.mu.Lock()
 			delete(s.configs, configKey(dataID, group, ns))
+			delete(s.types, configKey(dataID, group, ns))
 			s.deleted[configKey(dataID, group, ns)]++
 			s.mu.Unlock()
 			writeJSON(w, map[string]any{"code": 0, "message": "success", "data": true})
@@ -287,9 +312,9 @@ func newNcServer(t *testing.T, flavor int) *ncServer {
 				continue
 			}
 			if v3 {
-				items = append(items, map[string]any{"dataId": parts[0], "groupName": parts[1], "namespaceId": parts[2]})
+				items = append(items, map[string]any{"dataId": parts[0], "groupName": parts[1], "namespaceId": parts[2], "type": s.types[k]})
 			} else {
-				items = append(items, map[string]any{"dataId": parts[0], "group": parts[1], "tenant": parts[2]})
+				items = append(items, map[string]any{"dataId": parts[0], "group": parts[1], "tenant": parts[2], "type": s.types[k]})
 			}
 		}
 		data := map[string]any{"totalCount": len(items), "pageNumber": 1, "pagesAvailable": 1, "pageItems": items}
@@ -577,14 +602,22 @@ func TestConfigCRUDV2(t *testing.T) {
 	if data["dataId"] != "app.yaml" || data["group"] != "DEFAULT_GROUP" || data["namespace"] != "public" || data["content"] != content {
 		t.Fatalf("get JSON unexpected: %v", data)
 	}
+	// 2.x get carries no server-side type; the client infers it from the
+	// dataId suffix.
+	if data["type"] != "yaml" {
+		t.Fatalf("get JSON type = %v, want inferred yaml", data["type"])
+	}
 
-	// ls lists the published config.
+	// ls lists the published config with its type column.
 	out, err = runMuxcat(t, "nacos", "config", "ls")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, "app.yaml") || !strings.Contains(out, "seed.yaml") {
 		t.Fatalf("config ls output unexpected:\n%s", out)
+	}
+	if !strings.Contains(out, "type") || !strings.Contains(out, "yaml") {
+		t.Fatalf("config ls should show the type column:\n%s", out)
 	}
 	// --dataId filters (blur).
 	out, err = runMuxcat(t, "nacos", "config", "ls", "--dataId", "app")
@@ -625,8 +658,13 @@ func TestConfigCRUDV3(t *testing.T) {
 		t.Fatal("publish did not reach the 3.x admin endpoint")
 	}
 	env := runJSON(t, "nacos", "config", "get", "app.json")
-	if env["data"].(map[string]any)["content"] != content {
+	envData := env["data"].(map[string]any)
+	if envData["content"] != content {
 		t.Fatalf("get JSON unexpected: %v", env["data"])
+	}
+	// The 3.x server-reported contentType reaches the output.
+	if envData["type"] != "json" {
+		t.Fatalf("get JSON type = %v, want server-reported json", envData["type"])
 	}
 
 	out, err := runMuxcat(t, "nacos", "config", "ls")
@@ -636,12 +674,54 @@ func TestConfigCRUDV3(t *testing.T) {
 	if !strings.Contains(out, "app.json") || !strings.Contains(out, "seed.yaml") {
 		t.Fatalf("config ls output unexpected:\n%s", out)
 	}
+	if !strings.Contains(out, "json") || !strings.Contains(out, "yaml") {
+		t.Fatalf("config ls should show item types:\n%s", out)
+	}
 
 	if _, err := runMuxcat(t, "nacos", "config", "delete", "app.json"); err != nil {
 		t.Fatalf("delete failed: %v", err)
 	}
 	if s.deleteCount("app.json", "DEFAULT_GROUP", "public") != 1 {
 		t.Fatal("delete did not reach the server")
+	}
+}
+
+func TestConfigGetFormatAndNoHighlight(t *testing.T) {
+	setupEnv(t)
+	s := newNcServer(t, 3)
+	s.addConn(t, "v3", "--username", testUser, "--password", testPassword)
+
+	// seed.yaml: the server reports yaml. --no-highlight still prints the
+	// bare content (coloring is TTY-only and off in tests regardless).
+	out, err := runMuxcat(t, "nacos", "config", "get", "seed.yaml", "--no-highlight")
+	if err != nil {
+		t.Fatalf("get --no-highlight failed: %v\n%s", err, out)
+	}
+	if strings.TrimRight(out, "\n") != "seed: true" {
+		t.Fatalf("get --no-highlight output unexpected:\n%s", out)
+	}
+}
+
+func TestFormatHelpers(t *testing.T) {
+	for _, tc := range []struct {
+		dataID, format, lexer string
+	}{
+		{"app.yaml", "yaml", "yaml"},
+		{"app.yml", "yaml", "yaml"},
+		{"app.json", "json", "json"},
+		{"app.xml", "xml", "xml"},
+		{"app.html", "html", "html"},
+		{"app.properties", "properties", "ini"},
+		{"app.toml", "toml", "toml"},
+		{"app.txt", "text", ""},
+		{"no-suffix", "", ""},
+	} {
+		if f := inferFormat(tc.dataID); f != tc.format {
+			t.Errorf("inferFormat(%q) = %q, want %q", tc.dataID, f, tc.format)
+		}
+		if l := highlightLexer(tc.format); l != tc.lexer {
+			t.Errorf("highlightLexer(%q) = %q, want %q", tc.format, l, tc.lexer)
+		}
 	}
 }
 

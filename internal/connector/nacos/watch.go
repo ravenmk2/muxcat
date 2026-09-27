@@ -61,7 +61,7 @@ Text streaming only; --json is not supported.`,
 			namespace := namespaceOf(cmd, conn)
 
 			// Initial state; a missing config is watched from empty.
-			content, err := cl.api().configGet(cmd.Context(), dataID, group, namespace)
+			content, _, err := cl.api().configGet(cmd.Context(), dataID, group, namespace)
 			if err != nil {
 				if !isNotFound(err) {
 					return err
@@ -83,7 +83,7 @@ Text streaming only; --json is not supported.`,
 				if !changed {
 					continue
 				}
-				content, err = cl.api().configGet(cmd.Context(), dataID, group, namespace)
+				content, _, err = cl.api().configGet(cmd.Context(), dataID, group, namespace)
 				if err != nil {
 					if isNotFound(err) {
 						content = ""
@@ -121,7 +121,7 @@ func waitChange(ctx context.Context, cl *client, dataID, group, namespace, sum, 
 			return false, nil
 		case <-timer.C:
 		}
-		content, err := cl.api().configGet(ctx, dataID, group, namespace)
+		content, _, err := cl.api().configGet(ctx, dataID, group, namespace)
 		if err != nil {
 			if isNotFound(err) {
 				return sum != md5Hex(""), nil

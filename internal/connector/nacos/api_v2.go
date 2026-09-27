@@ -43,7 +43,7 @@ func blurPattern(s string) string {
 	return "*" + s + "*"
 }
 
-func (a apiV2) configGet(ctx context.Context, dataID, group, namespace string) (string, error) {
+func (a apiV2) configGet(ctx context.Context, dataID, group, namespace string) (string, string, error) {
 	r, err := a.c.send(ctx, http.MethodGet, "/nacos/v2/cs/config", url.Values{
 		"dataId":      {dataID},
 		"group":       {group},
@@ -59,21 +59,21 @@ func (a apiV2) configGet(ctx context.Context, dataID, group, namespace string) (
 			"tenant": {ns2(namespace)},
 		}, nil, nil)
 		if err1 != nil {
-			return "", err1
+			return "", "", err1
 		}
-		return string(r1.body), nil
+		return string(r1.body), "", nil
 	}
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	v, err := decodeData(r.body)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if s, ok := v.(string); ok {
-		return s, nil
+		return s, "", nil
 	}
-	return "", output.NewError(output.CodeQueryError,
+	return "", "", output.NewError(output.CodeQueryError,
 		"unexpected config get response: "+truncate(string(r.body), 512), "")
 }
 
@@ -175,6 +175,7 @@ func (a apiV2) configList(ctx context.Context, dataID, group, namespace string, 
 			DataID:    strOf(it, "dataId"),
 			Group:     strOf(it, "group"),
 			Namespace: ns2Display(strOf(it, "tenant", "namespace", "namespaceId")),
+			Type:      strOf(it, "type"),
 		})
 	}
 	return page, nil
