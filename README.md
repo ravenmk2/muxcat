@@ -4,12 +4,11 @@
 [![Release](https://img.shields.io/github/v/release/ravenmk2/muxcat)](https://github.com/ravenmk2/muxcat/releases)
 [![License](https://img.shields.io/github/license/ravenmk2/muxcat)](LICENSE)
 
-**cat 之于文件，muxcat 之于基础设施。**
+muxcat 是基础设施后端的统一命令行客户端，覆盖数据库、缓存、配置中心、消息队列、可观测性平台等各类后端。
 
-muxcat 是一个面向基础设施后端的统一命令行客户端：用同一套连接管理、查询语法和输出契约，接入数据库、缓存、消息队列、可观测性平台等各类后端。
-
-- **统一体验**：所有 connector 共享 conn 连接管理、全局 flag（`--output table/plain/tsv/json`、`--limit`、`--timeout`）与 envelope 结构化输出
-- **人机两宜**：TTY 下类型感知着色的表格（NULL、二进制 hex、日期格式一眼可辨），管道中输出稳定的 JSON envelope，退出码语义化
+- **统一体验**：所有 connector 共享同一套连接管理、查询命令与输出契约 —— 学会一个 connector，就会用全部
+- **人机两宜**：TTY 下是类型感知着色的表格（NULL、二进制、日期一眼可辨）；管道中是稳定的 JSON envelope 与语义化退出码
+- **Agent 友好**：结构化输出与错误 hint 让 AI Agent 能直接解析结果、自我纠错 —— 天然适合作为 AI Agent 操作基础设施的工具
 
 ## Connectors
 
@@ -17,15 +16,16 @@ muxcat 是一个面向基础设施后端的统一命令行客户端：用同一�
 
 | Connector | 状态 |
 |---|---|
-| SQLite | ✅ |
-| Redis | ✅ |
 | MySQL | ✅ |
 | Postgres | 📋 |
-| etcd | ✅ |
+| SQLite | ✅ |
+| Redis | ✅ |
 | MongoDB | 📋 |
 | ElasticSearch | 📋 |
-| OpenObserve | ✅ |
+| Nacos（2.x / 3.x） | ✅ |
+| etcd | ✅ |
 | RabbitMQ | 📋 |
 | AMQP | 📋 |
 | EMQX | 📋 |
+| OpenObserve | ✅ |
 | Jenkins | ✅ |

@@ -61,6 +61,7 @@ muxcat/
 | AMQP | 📋 |
 | EMQX | 📋 |
 | Jenkins | ✅ |
+| Nacos | ✅ |
 | TUI | 📋 |
 | 跨类型 conn ls 汇总 | 📋 |
 | 密钥轮换 | 📋 |

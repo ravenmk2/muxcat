@@ -85,6 +85,7 @@ muxcat/
 │       ├── etcd/          # etcd connector（见 docs/connectors/etcd.md）
 │       ├── jenkins/       # Jenkins connector（见 docs/connectors/jenkins.md）
 │       ├── mysql/         # MySQL connector（见 docs/connectors/mysql.md）
+│       ├── nacos/         # Nacos connector（见 docs/connectors/nacos.md）
 │       ├── openobserve/   # OpenObserve connector（见 docs/connectors/openobserve.md）
 │       ├── redis/         # Redis connector（见 docs/connectors/redis.md）
 │       └── sqlite/        # SQLite connector（见 docs/connectors/sqlite.md）
