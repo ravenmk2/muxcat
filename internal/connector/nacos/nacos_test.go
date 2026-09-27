@@ -87,35 +87,6 @@ type ncServer struct {
 
 func configKey(dataID, group, ns string) string { return dataID + "\x02" + group + "\x02" + ns }
 
-// wildcardMatch mirrors the server's blur search: * matches any run.
-func wildcardMatch(pattern, s string) bool {
-	if pattern == "*" || pattern == "" {
-		return true
-	}
-	if !strings.Contains(pattern, "*") {
-		return pattern == s
-	}
-	parts := strings.Split(pattern, "*")
-	pos := 0
-	for i, p := range parts {
-		if p == "" {
-			continue
-		}
-		idx := strings.Index(s[pos:], p)
-		if idx < 0 {
-			return false
-		}
-		if i == 0 && idx != 0 { // anchored prefix
-			return false
-		}
-		pos += idx + len(p)
-	}
-	if last := parts[len(parts)-1]; last != "" && !strings.HasSuffix(s, last) {
-		return false
-	}
-	return true
-}
-
 // fakeConfigType mirrors the server's type resolution on publish: the
 // explicit type wins, otherwise it is inferred from the dataId suffix,
 // defaulting to text.
@@ -292,12 +263,15 @@ func newNcServer(t *testing.T, flavor int) *ncServer {
 		q := r.URL.Query()
 		ns := q.Get("tenant")
 		groupFilter, dataIDFilter := q.Get("group"), q.Get("dataId")
+		accurate := false
 		if v3 {
 			ns, groupFilter = q.Get("namespaceId"), q.Get("groupName")
 			if ns == "" { // the admin side misbehaves on an empty namespace
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
+		} else {
+			accurate = q.Get("search") == "accurate"
 		}
 		var items []map[string]any
 		for k := range s.configs {
@@ -305,16 +279,27 @@ func newNcServer(t *testing.T, flavor int) *ncServer {
 			if ns2Display(ns) != parts[2] {
 				continue
 			}
-			if dataIDFilter != "" && !wildcardMatch(dataIDFilter, parts[0]) {
-				continue
+			if dataIDFilter != "" {
+				if accurate { // the accurate search matches dataId exactly
+					if dataIDFilter != parts[0] {
+						continue
+					}
+				} else if !wildcardMatch(dataIDFilter, parts[0]) {
+					continue
+				}
 			}
 			if groupFilter != "" && !wildcardMatch(groupFilter, parts[1]) {
 				continue
 			}
-			if v3 {
+			switch {
+			case v3:
 				items = append(items, map[string]any{"dataId": parts[0], "groupName": parts[1], "namespaceId": parts[2], "type": s.types[k]})
-			} else {
+			case accurate:
 				items = append(items, map[string]any{"dataId": parts[0], "group": parts[1], "tenant": parts[2], "type": s.types[k]})
+			default:
+				// Older 2.x servers (verified on 2.2.0) answer blur items
+				// with a null type.
+				items = append(items, map[string]any{"dataId": parts[0], "group": parts[1], "tenant": parts[2], "type": nil})
 			}
 		}
 		data := map[string]any{"totalCount": len(items), "pageNumber": 1, "pagesAvailable": 1, "pageItems": items}
@@ -699,6 +684,31 @@ func TestConfigGetFormatAndNoHighlight(t *testing.T) {
 	}
 	if strings.TrimRight(out, "\n") != "seed: true" {
 		t.Fatalf("get --no-highlight output unexpected:\n%s", out)
+	}
+}
+
+func TestConfigGetTypeFallbackV2(t *testing.T) {
+	setupEnv(t)
+	s := newNcServer(t, 2)
+	s.addConn(t, "local", "--username", testUser, "--password", testPassword)
+
+	// A suffixless dataId: the suffix inference draws a blank, so the
+	// connector falls back to an accurate server lookup for the type.
+	if _, err := runMuxcat(t, "nacos", "config", "publish", "application", "--content", "a=1", "--type", "properties"); err != nil {
+		t.Fatalf("publish failed: %v", err)
+	}
+	env := runJSON(t, "nacos", "config", "get", "application")
+	if got := env["data"].(map[string]any)["type"]; got != "properties" {
+		t.Fatalf("get JSON type = %v, want properties from the accurate lookup", got)
+	}
+	// ls on 2.x goes through the accurate search, so the type column is
+	// populated even though this fake (like a real 2.2.0) nulls it on blur.
+	out, err := runMuxcat(t, "nacos", "config", "ls", "--dataId", "application")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "properties") {
+		t.Fatalf("config ls should show the type via the accurate search:\n%s", out)
 	}
 }
 

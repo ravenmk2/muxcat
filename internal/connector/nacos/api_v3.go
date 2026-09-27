@@ -59,6 +59,10 @@ func configNotFound(dataID, group, namespace string) *output.Error {
 		"check the addressing triple: dataId, group (-g, default DEFAULT_GROUP) and namespace (--namespace, default public)")
 }
 
+// configType is never reached on 3.x: the client read endpoint always
+// reports the contentType.
+func (a apiV3) configType(context.Context, string, string, string) string { return "" }
+
 func (a apiV3) configPublish(ctx context.Context, dataID, group, namespace, content, contentType string) error {
 	params := url.Values{
 		"dataId":      {dataID},

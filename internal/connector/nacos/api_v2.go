@@ -148,10 +148,14 @@ func (a apiV2) configDelete(ctx context.Context, dataID, group, namespace string
 }
 
 func (a apiV2) configList(ctx context.Context, dataID, group, namespace string, pageNo, pageSize int) (*configPage, error) {
-	// Only the v1 endpoint offers the blur search.
+	// The accurate search is the only 2.x list flavor that reliably
+	// populates the item type — older servers (verified on 2.2.0) answer
+	// blur items with a null type. The dataId filter is therefore applied
+	// client-side, with the same wildcard semantics the server's blur
+	// search has.
 	r, err := a.c.send(ctx, http.MethodGet, "/nacos/v1/cs/configs", url.Values{
-		"search":   {"blur"},
-		"dataId":   {blurPattern(dataID)},
+		"search":   {"accurate"},
+		"dataId":   {""},
 		"group":    {group},
 		"tenant":   {ns2(namespace)},
 		"pageNo":   {strconv.Itoa(pageNo)},
@@ -170,15 +174,80 @@ func (a apiV2) configList(ctx context.Context, dataID, group, namespace string, 
 			"unexpected config list response: "+truncate(string(r.body), 512), "")
 	}
 	page := &configPage{Total: intOf(m, "totalCount", "total")}
+	pattern := blurPattern(dataID)
 	for _, it := range itemsOf(m) {
+		id := strOf(it, "dataId")
+		if pattern != "" && !wildcardMatch(pattern, id) {
+			continue
+		}
 		page.Items = append(page.Items, configItem{
-			DataID:    strOf(it, "dataId"),
+			DataID:    id,
 			Group:     strOf(it, "group"),
 			Namespace: ns2Display(strOf(it, "tenant", "namespace", "namespaceId")),
 			Type:      strOf(it, "type"),
 		})
 	}
 	return page, nil
+}
+
+// configType looks up a config's server-recorded type via an exact
+// (accurate) search. Best-effort: any failure yields "".
+func (a apiV2) configType(ctx context.Context, dataID, group, namespace string) string {
+	r, err := a.c.send(ctx, http.MethodGet, "/nacos/v1/cs/configs", url.Values{
+		"search":   {"accurate"},
+		"dataId":   {dataID},
+		"group":    {group},
+		"tenant":   {ns2(namespace)},
+		"pageNo":   {"1"},
+		"pageSize": {"1"},
+	}, nil, nil)
+	if err != nil {
+		return ""
+	}
+	v, err := decodeData(r.body)
+	if err != nil {
+		return ""
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	for _, it := range itemsOf(m) {
+		if strOf(it, "dataId") == dataID {
+			return strOf(it, "type")
+		}
+	}
+	return ""
+}
+
+// wildcardMatch mirrors the server-side blur search: * matches any run, a
+// pattern without wildcards is an exact match.
+func wildcardMatch(pattern, s string) bool {
+	if pattern == "*" || pattern == "" {
+		return true
+	}
+	if !strings.Contains(pattern, "*") {
+		return pattern == s
+	}
+	parts := strings.Split(pattern, "*")
+	pos := 0
+	for i, p := range parts {
+		if p == "" {
+			continue
+		}
+		idx := strings.Index(s[pos:], p)
+		if idx < 0 {
+			return false
+		}
+		if i == 0 && idx != 0 { // anchored prefix
+			return false
+		}
+		pos += idx + len(p)
+	}
+	if last := parts[len(parts)-1]; last != "" && !strings.HasSuffix(s, last) {
+		return false
+	}
+	return true
 }
 
 func (a apiV2) serviceList(ctx context.Context, namespace string, pageNo, pageSize int) (*servicePage, error) {

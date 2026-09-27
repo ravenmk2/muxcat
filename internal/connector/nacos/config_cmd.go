@@ -50,8 +50,8 @@ func newConfigGetCmd() *cobra.Command {
 		Long: `Get a config's content. Text output is the bare content,
 syntax-highlighted on a TTY: the format reported by a 3.x server
 wins, otherwise it is inferred from the dataId suffix (.yaml,
-.json, ...). --no-highlight disables the coloring; pipes are
-never colored.`,
+.json, ...), with a server-side lookup as the last resort (2.x).
+--no-highlight disables the coloring; pipes are never colored.`,
 		Args: cli.ExactArgs(1, "<dataId>", "dataId"),
 		Example: `  muxcat nacos config get app.yaml
   muxcat nacos config get app.yaml -g BIZ_GROUP --namespace staging
@@ -75,6 +75,11 @@ never colored.`,
 			}
 			if format == "" {
 				format = inferFormat(dataID)
+			}
+			if format == "" {
+				// Suffixless dataId on 2.x: ask the server (accurate
+				// search); a failure just skips highlighting.
+				format = cl.api().configType(cmd.Context(), dataID, group, namespace)
 			}
 			lexer := ""
 			if !cli.FlagBool(cmd, "no-highlight") {

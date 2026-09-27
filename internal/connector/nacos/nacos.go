@@ -391,6 +391,10 @@ func decodeData(body []byte) (any, error) {
 // it, e.g. 2.x).
 type api interface {
 	configGet(ctx context.Context, dataID, group, namespace string) (content, format string, err error)
+	// configType resolves a config's server-recorded type, best-effort
+	// ("" on failure); only needed where configGet cannot carry the
+	// format (2.x).
+	configType(ctx context.Context, dataID, group, namespace string) string
 	configPublish(ctx context.Context, dataID, group, namespace, content, contentType string) error
 	configDelete(ctx context.Context, dataID, group, namespace string) error
 	configList(ctx context.Context, dataID, group, namespace string, pageNo, pageSize int) (*configPage, error)
