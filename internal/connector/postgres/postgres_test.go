@@ -99,7 +99,7 @@ func TestPGConfig(t *testing.T) {
 		t.Fatal("tls=false instance must not get a TLS config")
 	}
 
-	// TLS instance flips sslmode to require (encrypted, unverified).
+	// TLS instance gets sslmode=require semantics (encrypted, unverified).
 	cfg, err = pgConfig(Instance{Host: "db.local", Port: 5432, TLS: true}, conn, "")
 	if err != nil {
 		t.Fatal(err)

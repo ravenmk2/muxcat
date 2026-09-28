@@ -5,6 +5,7 @@ package postgres
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"errors"
 	"net"
@@ -93,21 +94,23 @@ func meta(connName string, start time.Time, truncated bool) output.Meta {
 // connection's database for this invocation only; an empty database falls
 // back to "postgres".
 func pgConfig(inst Instance, conn Connection, dbOverride string) (*pgx.ConnConfig, error) {
-	sslmode := "disable"
-	if inst.TLS {
-		// sslmode=require encrypts without CA verification (libpq
-		// semantics), matching mysql's tls=true.
-		sslmode = "require"
-	}
 	// Only the constant sslmode token goes through the conn-string parser;
 	// every user-controlled field is assigned structurally afterwards.
-	cfg, err := pgx.ParseConfig("sslmode=" + sslmode)
+	cfg, err := pgx.ParseConfig("sslmode=disable")
 	if err != nil {
 		return nil, output.NewError(output.CodeConfigInvalid,
 			"failed to build the driver config: "+err.Error(), "")
 	}
 	cfg.Host = inst.Host
 	cfg.Port = uint16(inst.Port) // validated to 1-65535 at conn add / schema
+	if inst.TLS {
+		// sslmode=require semantics (libpq): encrypt without CA
+		// verification, matching mysql's tls=true. Assigned structurally
+		// because ParseConfig resolves TLS against the parse-time default
+		// host, which is a unix socket directory on macOS/Linux — and TLS
+		// settings are silently ignored for unix sockets there.
+		cfg.TLSConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // intentional: sslmode=require encrypts without verification
+	}
 	cfg.User = conn.Username
 	cfg.Database = conn.Database
 	if cfg.Database == "" {
