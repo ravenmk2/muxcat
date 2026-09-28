@@ -28,9 +28,9 @@ payloads (base64 for non-UTF-8 bodies); --file writes payloads to a
 directory (0600). Receiving no message before the timeout fails with
 TIMEOUT (exit 3). A streaming --follow mode is not implemented.
 
-The session is clean-start with a random client id, so the batch
-only sees messages published inside the subscription window (plus
-retained messages).`,
+The session is clean-start with a random client id (overridable
+with --client-id), so the batch only sees messages published inside
+the subscription window (plus retained messages).`,
 		Args: cli.ExactArgs(1, "<topic-filter>", "topic filter"),
 		Example: `  muxcat mqtt sub events/#
   muxcat mqtt sub sensors/+/temp --count 10 --timeout 10s
@@ -120,6 +120,7 @@ retained messages).`,
 	c.Flags().Duration("timeout", 30*time.Second, "stop collecting after this long without enough messages")
 	c.Flags().Int("qos", 1, "subscription QoS level: 0 | 1 | 2")
 	c.Flags().String("file", "", "write payloads to this directory: <filter>-0.bin, <filter>-1.bin... (0600)")
+	addClientIDFlag(c)
 	return c
 }
 

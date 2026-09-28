@@ -77,7 +77,7 @@ func classifyDialV3(err error, password string) error {
 	case errors.Is(err, packetsv3.ErrorRefusedIDRejected):
 		return output.NewError(output.CodeConnectFailed,
 			"client id rejected: "+sanitizeErr(err, password),
-			"check the connection's clientId")
+			"check the connection's clientId (or --client-id)")
 	case errors.Is(err, packetsv3.ErrorRefusedServerUnavailable):
 		return output.NewError(output.CodeConnectFailed,
 			"server unavailable: "+sanitizeErr(err, password),
@@ -114,7 +114,7 @@ func classifyConnackV5(rc byte) error {
 			"retry with --protocol-version 3")
 	case 0x85: // Client Identifier not valid
 		return output.NewError(output.CodeConnectFailed,
-			"client id rejected", "check the connection's clientId")
+			"client id rejected", "check the connection's clientId (or --client-id)")
 	case 0x88, 0x89: // Server unavailable / Server busy
 		return output.NewError(output.CodeConnectFailed,
 			"server unavailable or busy", "retry later, or check the broker")

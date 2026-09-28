@@ -52,7 +52,7 @@ Transports are TCP (mqtt://), TLS (mqtts://) and WebSocket (ws://,
 wss://). sub is a one-shot batch: it collects --count messages (or
 stops at --timeout) and returns one envelope; a streaming --follow
 mode is not implemented. Every command opens a short-lived session
-(clean start, random client ID).`,
+(clean start, random client ID unless --client-id overrides it).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -73,6 +73,20 @@ func meta(connName string, start time.Time, truncated bool) output.Meta {
 		ElapsedMS:  time.Since(start).Milliseconds(),
 		Truncated:  truncated,
 	}
+}
+
+// addClientIDFlag registers the unified --client-id override flag.
+func addClientIDFlag(c *cobra.Command) {
+	c.Flags().String("client-id", "", "MQTT client id (overrides the connection's clientId; default: random muxcat-<pid>-<rand>)")
+}
+
+// clientIDOf resolves the effective client id: --client-id > connection
+// clientId ("" falls through to the random id generated at dial time).
+func clientIDOf(cmd *cobra.Command, conn Connection) string {
+	if cmd.Flags().Changed("client-id") {
+		return cli.FlagString(cmd, "client-id")
+	}
+	return conn.ClientID
 }
 
 // queryTimeout resolves the command timeout: the connection-level timeout
@@ -158,6 +172,7 @@ func openForConn(cmd *cobra.Command, connName, writeOp string) (*cmdEnv, error) 
 	if err != nil {
 		return nil, err
 	}
+	conn.ClientID = clientIDOf(cmd, conn)
 	if writeOp != "" {
 		if err := requireWritable(conn, writeOp); err != nil {
 			return nil, err

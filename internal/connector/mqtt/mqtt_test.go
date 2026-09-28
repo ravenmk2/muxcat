@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	mochi "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/listeners"
+	"github.com/mochi-mqtt/server/v2/packets"
 
 	"github.com/ravenmk2/muxcat/internal/cli"
 	"github.com/ravenmk2/muxcat/internal/output"
@@ -116,8 +118,9 @@ func startBroker(t *testing.T) string {
 }
 
 // startBrokerWithHook starts a broker, optionally with an auth hook
-// config; nil means anonymous allow-all.
-func startBrokerWithHook(t *testing.T, ledger *auth.Ledger) string {
+// config; nil means anonymous allow-all. extra hooks are added after the
+// auth hook (e.g. observation recorders).
+func startBrokerWithHook(t *testing.T, ledger *auth.Ledger, extra ...mochi.Hook) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -134,6 +137,11 @@ func startBrokerWithHook(t *testing.T, ledger *auth.Ledger) string {
 		}
 	} else if err := server.AddHook(new(auth.AllowHook), nil); err != nil {
 		t.Fatalf("add allow hook: %v", err)
+	}
+	for _, h := range extra {
+		if err := server.AddHook(h, nil); err != nil {
+			t.Fatalf("add hook: %v", err)
+		}
 	}
 	if err := server.AddListener(listeners.NewTCP(listeners.Config{ID: "t1", Address: addr})); err != nil {
 		t.Fatalf("add listener: %v", err)
@@ -623,6 +631,57 @@ func TestPubSubLoopV5(t *testing.T) {
 	addTestConn(t, "mqtt", "conn", "add", "v5",
 		"--url", "mqtt://"+addr, "--protocol-version", "5", "--set-default")
 	pubSubLoop(t, "v5")
+}
+
+// clientIDRecorder is a mochi hook recording the client id of every
+// connection, in connect order.
+type clientIDRecorder struct {
+	mochi.HookBase
+	mu  sync.Mutex
+	ids []string
+}
+
+func (h *clientIDRecorder) Provides(b byte) bool { return b == mochi.OnConnect }
+
+func (h *clientIDRecorder) OnConnect(cl *mochi.Client, _ packets.Packet) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.ids = append(h.ids, cl.ID)
+	return nil
+}
+
+func (h *clientIDRecorder) snapshot() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.ids...)
+}
+
+func TestClientIDFlagOverridesConnection(t *testing.T) {
+	setupEnv(t)
+	rec := &clientIDRecorder{}
+	addr := startBrokerWithHook(t, nil, rec)
+	addTestConn(t, "mqtt", "conn", "add", "local",
+		"--url", "mqtt://"+addr, "--client-id", "conn-level-id", "--set-default")
+	runJSON(t, "mqtt", "pub", "muxcat/test/topic", "--payload", "x", "--client-id", "flag-id")
+	// conn test without the flag falls back to the connection's clientId.
+	runJSON(t, "mqtt", "conn", "test", "local")
+	ids := rec.snapshot()
+	if len(ids) != 2 || ids[0] != "flag-id" || ids[1] != "conn-level-id" {
+		t.Errorf("client ids = %v, want [flag-id conn-level-id]", ids)
+	}
+}
+
+func TestClientIDDefaultRandom(t *testing.T) {
+	setupEnv(t)
+	rec := &clientIDRecorder{}
+	addr := startBrokerWithHook(t, nil, rec)
+	addTestConn(t, "mqtt", "conn", "add", "local",
+		"--url", "mqtt://"+addr, "--set-default")
+	runJSON(t, "mqtt", "conn", "test", "local")
+	ids := rec.snapshot()
+	if len(ids) != 1 || !strings.HasPrefix(ids[0], "muxcat-") {
+		t.Errorf("client ids = %v, want one muxcat-<pid>-<rand> id", ids)
+	}
 }
 
 func TestSubTimeoutZeroMessages(t *testing.T) {

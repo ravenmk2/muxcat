@@ -86,6 +86,7 @@ readonly connections before any dialing happens.`,
 	c.Flags().Int("qos", 0, "MQTT QoS level: 0 | 1 | 2")
 	c.Flags().Bool("retain", false, "set the retain flag")
 	c.Flags().Int("count", 1, "send the message this many times (1-100000)")
+	addClientIDFlag(c)
 	return c
 }
 

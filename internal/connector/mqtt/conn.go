@@ -396,7 +396,7 @@ func newConnDefaultCmd() *cobra.Command {
 }
 
 func newConnTestCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:   "test <name>",
 		Short: "Test a connection (real dial + CONNACK) and report latency",
 		Args:  cli.ExactArgs(1, "<name>", "name"),
@@ -423,6 +423,8 @@ func newConnTestCmd() *cobra.Command {
 			}, meta(env.name, start, false))
 		},
 	}
+	addClientIDFlag(c)
+	return c
 }
 
 func connNotFound(name string) *output.Error {
