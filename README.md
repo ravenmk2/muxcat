@@ -33,7 +33,7 @@ and read the same output.
 | Elasticsearch | 📋 |
 | Nacos (2.x / 3.x) | ✅ |
 | etcd | ✅ |
-| RabbitMQ | 📋 |
+| RabbitMQ | ✅ |
 | AMQP | 📋 |
 | EMQX | 📋 |
 | OpenObserve | ✅ |
