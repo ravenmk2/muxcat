@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -335,18 +337,72 @@ each payload at 1KiB (--json keeps the raw payload).`,
 					displayPayload(m),
 				})
 			}
-			return cli.RenderResult(cmd, &output.Result{
+			res := &output.Result{
 				Columns:  []string{"exchange", "routing_key", "redelivered", "message_count", "payload"},
 				Rows:     rows,
 				JSONData: arr,
-			}, meta(name, start, false))
+			}
+			if file := cli.FlagString(cmd, "file"); file != "" {
+				files, err := writePayloadFiles(file, arr)
+				if err != nil {
+					return err
+				}
+				// With --file, the files summary is the payload of record:
+				// --json reports it instead of the raw message array.
+				summary := map[string]any{"files": files, "count": len(files)}
+				res.Value = summary
+				res.JSONData = summary
+				res.Message = fmt.Sprintf("wrote %d payload(s) to %s", len(files), strings.Join(files, ", "))
+			}
+			return cli.RenderResult(cmd, res, meta(name, start, false))
 		},
 	}
 	c.Flags().String("vhost", "", "vhost of the queue (default: /)")
 	c.Flags().Int("limit", 1, "number of messages to fetch (1-50)")
 	c.Flags().String("ackmode", "ack_requeue_true",
 		"ack_requeue_true/reject_requeue_true requeue (peek); ack_requeue_false/reject_requeue_false are destructive")
+	c.Flags().String("file", "", "write message payloads to disk: <path> for one message, <path>.0, .1... for several (0600)")
 	return c
+}
+
+// writePayloadFiles writes fetched message payloads to disk: a single
+// message goes to path, several to path.0, path.1... base64 payloads are
+// decoded to their raw bytes first. Files are created 0600; any failure
+// removes the files already written, so a failed run leaves nothing
+// behind.
+func writePayloadFiles(path string, arr []any) ([]string, error) {
+	files := make([]string, 0, len(arr))
+	fail := func(err error) ([]string, error) {
+		for _, f := range files {
+			_ = os.Remove(f)
+		}
+		return nil, err
+	}
+	for i, item := range arr {
+		m := obj(item)
+		payload := str(m["payload"])
+		var raw []byte
+		if str(m["payload_encoding"]) == "base64" {
+			decoded, err := base64.StdEncoding.DecodeString(payload)
+			if err != nil {
+				return fail(output.NewError(output.CodeQueryError,
+					fmt.Sprintf("message %d has invalid base64 payload: %v", i, err), ""))
+			}
+			raw = decoded
+		} else {
+			raw = []byte(payload)
+		}
+		target := path
+		if len(arr) > 1 {
+			target = fmt.Sprintf("%s.%d", path, i)
+		}
+		if err := os.WriteFile(target, raw, 0o600); err != nil {
+			return fail(output.NewError(output.CodeGeneral,
+				"cannot write "+target+": "+err.Error(), ""))
+		}
+		files = append(files, target)
+	}
+	return files, nil
 }
 
 // displayPayload decodes a base64 payload and truncates the display text

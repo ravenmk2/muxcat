@@ -1,8 +1,10 @@
 package rabbitmq
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -210,10 +212,16 @@ func newExchangePublishCmd() *cobra.Command {
 		Long: `Publish a message to an exchange through the Management API.
 This is a debugging facility: it is synchronous, unconfirmed, and not
 suited for large payloads or high rates. The result reports whether
-the message was routed to at least one queue.`,
+the message was routed to at least one queue.
+
+The payload comes from --payload or --payload-file (mutually
+exclusive; the file is capped at 1MB). --count sends the same message
+repeatedly and summarizes how many were sent and routed; the first
+failure stops the loop and reports the partial count.`,
 		Args: cli.ExactArgs(1, "<name>", "name"),
 		Example: `  muxcat rabbitmq exchange publish events --routing-key app.started --payload '{"id":42}'
   muxcat rabbitmq exchange publish amq.direct --payload aGVsbG8= --payload-encoding base64
+  muxcat rabbitmq exchange publish events --payload-file message.bin --count 100
   muxcat rabbitmq exchange publish events --payload hi --props '{"content_type":"text/plain","delivery_mode":2}'`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
@@ -231,48 +239,110 @@ the message was routed to at least one queue.`,
 				return output.NewError(output.CodeConfigInvalid,
 					"invalid --payload-encoding: "+encoding, "valid values: string|base64")
 			}
-			if !cmd.Flags().Changed("payload") {
-				return output.NewError(output.CodeMissingArgument,
-					"missing required flag --payload", "the Management API publish endpoint requires a payload")
+			payload, err := resolvePublishPayload(cmd, encoding)
+			if err != nil {
+				return err
+			}
+			count, _ := cmd.Flags().GetInt("count")
+			if count < 1 || count > 10000 {
+				return output.NewError(output.CodeConfigInvalid,
+					fmt.Sprintf("invalid --count: %d", count), "valid range: 1-10000")
 			}
 			props, err := parseJSONArg("--props", cli.FlagString(cmd, "props"))
 			if err != nil {
 				return err
 			}
+			routingKey := cli.FlagString(cmd, "routing-key")
 			body, err := json.Marshal(map[string]any{
 				"properties":       props,
-				"routing_key":      cli.FlagString(cmd, "routing-key"),
-				"payload":          cli.FlagString(cmd, "payload"),
+				"routing_key":      routingKey,
+				"payload":          payload,
 				"payload_encoding": encoding,
 			})
 			if err != nil {
 				return err
 			}
 			path := fmt.Sprintf("/api/exchanges/%s/%s/publish", esc(vhostFlag(cmd)), esc(args[0]))
-			resp, err := cl.do(cmd.Context(), "POST", path, body)
-			if err != nil {
-				return err
+
+			sent, routed := 0, 0
+			summary := func() *output.Result {
+				return &output.Result{
+					Value: map[string]any{
+						"exchange": args[0], "routing_key": routingKey,
+						"sent": sent, "routed": routed,
+					},
+					Message: fmt.Sprintf("published to %s (sent: %d, routed: %d)", args[0], sent, routed),
+				}
 			}
-			raw, err := decodeBody(resp.body)
-			if err != nil {
-				return err
+			for sent < count {
+				resp, err := cl.do(cmd.Context(), "POST", path, body)
+				if err != nil {
+					if sent > 0 {
+						// Partial progress: render the summary, then fail.
+						return cli.RenderPartial(cmd, summary(), meta(name, start, false), err)
+					}
+					return err
+				}
+				sent++
+				raw, derr := decodeBody(resp.body)
+				if derr != nil {
+					return cli.RenderPartial(cmd, summary(), meta(name, start, false), derr)
+				}
+				if boolOf(obj(raw)["routed"]) {
+					routed++
+				}
 			}
-			routed := boolOf(obj(raw)["routed"])
-			message := fmt.Sprintf("published to %s (routed: %v)", args[0], routed)
-			if !routed {
-				message = fmt.Sprintf("published to %s, but no queue was bound (routed: false)", args[0])
+			res := summary()
+			if routed == 0 {
+				res.Message = fmt.Sprintf("published to %s (sent: %d), but no queue was bound (routed: 0)", args[0], sent)
 			}
-			return cli.RenderResult(cmd, &output.Result{
-				Value:    raw,
-				JSONData: raw,
-				Message:  message,
-			}, meta(name, start, false))
+			return cli.RenderResult(cmd, res, meta(name, start, false))
 		},
 	}
 	c.Flags().String("vhost", "", "vhost of the exchange (default: /)")
 	c.Flags().String("routing-key", "", "routing key of the message")
-	c.Flags().String("payload", "", "message payload (required)")
-	c.Flags().String("payload-encoding", "string", "payload encoding: string|base64")
+	c.Flags().String("payload", "", "message payload (mutually exclusive with --payload-file)")
+	c.Flags().String("payload-file", "", "read the payload from a file (max 1MB; mutually exclusive with --payload)")
+	c.Flags().String("payload-encoding", "string", "payload encoding: string|base64 (file content is base64-encoded when base64)")
+	c.Flags().Int("count", 1, "send the message this many times (1-10000)")
 	c.Flags().String("props", "", "message properties as a JSON object (e.g. '{\"delivery_mode\":2}')")
 	return c
+}
+
+// publishPayloadFileLimit caps --payload-file at 1MB: the Management API
+// publish endpoint is a debugging facility, not a bulk loader.
+const publishPayloadFileLimit = 1 << 20
+
+// resolvePublishPayload resolves the payload from --payload or
+// --payload-file (mutually exclusive, exactly one required). With base64
+// encoding, file content is encoded; a --payload string is sent as-is.
+func resolvePublishPayload(cmd *cobra.Command, encoding string) (string, error) {
+	payloadSet := cmd.Flags().Changed("payload")
+	file := cli.FlagString(cmd, "payload-file")
+	if payloadSet && file != "" {
+		return "", output.NewError(output.CodeConfigInvalid,
+			"--payload and --payload-file are mutually exclusive", "pass exactly one payload source")
+	}
+	if file != "" {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			return "", output.NewError(output.CodeGeneral,
+				"cannot read payload file "+file+": "+err.Error(), "")
+		}
+		if len(raw) > publishPayloadFileLimit {
+			return "", output.NewError(output.CodeConfigInvalid,
+				fmt.Sprintf("payload file too large: %d bytes (limit 1MB)", len(raw)),
+				"the Management API publish endpoint is meant for small debug messages")
+		}
+		if encoding == "base64" {
+			return base64.StdEncoding.EncodeToString(raw), nil
+		}
+		return string(raw), nil
+	}
+	if !payloadSet {
+		return "", output.NewError(output.CodeMissingArgument,
+			"missing payload: pass --payload or --payload-file",
+			"the Management API publish endpoint requires a payload")
+	}
+	return cli.FlagString(cmd, "payload"), nil
 }

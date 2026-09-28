@@ -70,3 +70,37 @@ func overviewRows(m map[string]any) [][]any {
 	}
 	return rows
 }
+
+func newWhoamiCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "whoami",
+		Short: "Show the authenticated identity (GET /api/whoami)",
+		Args:  cobra.NoArgs,
+		Example: `  muxcat rabbitmq whoami
+  muxcat rabbitmq whoami --json`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			start := time.Now()
+			name, _, cl, _, err := openForCmd(cmd)
+			if err != nil {
+				return err
+			}
+			resp, err := cl.do(cmd.Context(), "GET", "/api/whoami", nil)
+			if err != nil {
+				return err
+			}
+			raw, err := decodeBody(resp.body)
+			if err != nil {
+				return err
+			}
+			m := obj(raw)
+			return cli.RenderResult(cmd, &output.Result{
+				Value: map[string]any{
+					"name": str(m["name"]),
+					"tags": userTags(m["tags"]),
+				},
+				JSONData: raw,
+				Syntax:   "yaml",
+			}, meta(name, start, false))
+		},
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -80,12 +81,13 @@ func setupEnv(t *testing.T) {
 // the escaped path (vhost "/" travels as %2F) and records write calls.
 type rmqServer struct {
 	*httptest.Server
-	mu        sync.Mutex
-	authUser  string
-	authPass  string
-	writes    map[string]int
-	lastBody  map[string][]byte
-	lastQuery map[string]string
+	mu          sync.Mutex
+	authUser    string
+	authPass    string
+	writes      map[string]int
+	lastBody    map[string][]byte
+	lastQuery   map[string]string
+	depFeatures atomic.Bool
 }
 
 func (s *rmqServer) record(r *http.Request) {
@@ -137,6 +139,7 @@ func newRmqServer(t *testing.T) *rmqServer {
 		lastBody:  map[string][]byte{},
 		lastQuery: map[string]string{},
 	}
+	s.depFeatures.Store(true)
 
 	// 4.x-shaped queue: carries a "type" field.
 	queue4x := `{"name":"q1","vhost":"/","type":"classic","state":"running","messages":12,"messages_ready":10,"messages_unacknowledged":2,"consumers":1,"memory":1048576,"durable":true,"arguments":{}}`
@@ -178,7 +181,23 @@ func newRmqServer(t *testing.T) *rmqServer {
 			writeJSON(w, allQueues)
 		case p == "/api/queues/%2F/q1/get" && r.Method == "POST":
 			s.record(r)
-			writeJSON(w, `[{"payload":"aGVsbG8=","payload_encoding":"base64","exchange":"ex1","routing_key":"rk","redelivered":false,"message_count":11,"properties":{}}]`)
+			// Honor count: return up to two messages.
+			var req struct {
+				Count int `json:"count"`
+			}
+			_ = json.Unmarshal(s.bodyOf("POST", "/api/queues/%2F/q1/get"), &req)
+			msgs := []string{
+				`{"payload":"aGVsbG8=","payload_encoding":"base64","exchange":"ex1","routing_key":"rk","redelivered":false,"message_count":11,"properties":{}}`,
+				`{"payload":"d29ybGQ=","payload_encoding":"base64","exchange":"ex1","routing_key":"rk","redelivered":false,"message_count":10,"properties":{}}`,
+			}
+			n := req.Count
+			if n < 1 {
+				n = 1
+			}
+			if n > len(msgs) {
+				n = len(msgs)
+			}
+			writeJSON(w, "["+strings.Join(msgs[:n], ",")+"]")
 		case strings.HasSuffix(p, "/contents") && r.Method == "DELETE":
 			s.record(r)
 			w.WriteHeader(http.StatusNoContent)
@@ -199,6 +218,20 @@ func newRmqServer(t *testing.T) *rmqServer {
 			writeJSON(w, `[{"name":"ex1","vhost":"/","type":"fanout","durable":true,"auto_delete":false,"internal":false,"arguments":{}},{"name":"amq.direct","vhost":"/","type":"direct","durable":true,"auto_delete":false,"internal":false,"arguments":{}}]`)
 		case strings.HasPrefix(p, "/api/exchanges/%2F/") && strings.HasSuffix(p, "/publish") && r.Method == "POST":
 			s.record(r)
+			// flaky fails the third publish, exercising --count partial
+			// failure.
+			if p == "/api/exchanges/%2F/flaky/publish" && s.writeCount("POST", p) >= 3 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"error":"boom","reason":"third time unlucky"}`))
+				return
+			}
+			// badjson returns an undecodable body after a successful POST,
+			// exercising the decode-failure partial path.
+			if p == "/api/exchanges/%2F/badjson/publish" {
+				_, _ = w.Write([]byte("{not json"))
+				return
+			}
 			writeJSON(w, `{"routed":true}`)
 		case p == "/api/exchanges/%2F/ex1" && r.Method == "GET":
 			writeJSON(w, `{"name":"ex1","vhost":"/","type":"fanout","durable":true,"auto_delete":false,"internal":false,"arguments":{}}`)
@@ -242,6 +275,47 @@ func newRmqServer(t *testing.T) *rmqServer {
 		case strings.HasPrefix(p, "/api/vhosts/") && (r.Method == "PUT" || r.Method == "DELETE"):
 			s.record(r)
 			w.WriteHeader(http.StatusNoContent)
+		case p == "/api/policies" && r.Method == "GET":
+			writeJSON(w, `[{"name":"ttl","vhost":"/","pattern":"^temp\\.","apply-to":"queues","priority":1,"definition":{"message-ttl":60000}}]`)
+		case p == "/api/operator-policies" && r.Method == "GET":
+			writeJSON(w, `[{"name":"max-len","vhost":"/","pattern":".*","apply-to":"queues","priority":0,"definition":{"max-length":1000}}]`)
+		case p == "/api/policies/%2F/ttl" && r.Method == "GET":
+			writeJSON(w, `{"name":"ttl","vhost":"/","pattern":"^temp\\.","apply-to":"queues","priority":1,"definition":{"message-ttl":60000}}`)
+		case strings.HasPrefix(p, "/api/policies/%2F/") && (r.Method == "PUT" || r.Method == "DELETE"):
+			s.record(r)
+			w.WriteHeader(http.StatusNoContent)
+		case strings.HasPrefix(p, "/api/operator-policies/%2F/") && (r.Method == "PUT" || r.Method == "DELETE"):
+			s.record(r)
+			w.WriteHeader(http.StatusNoContent)
+		case (p == "/api/definitions" || p == "/api/definitions/%2F") && r.Method == "GET":
+			writeJSON(w, `{"rabbitmq_version":"4.3.1","users":[{"name":"admin","tags":"administrator"}],"vhosts":[{"name":"/"}],"permissions":[],"queues":[],"exchanges":[],"bindings":[],"policies":[]}`)
+		case (p == "/api/definitions" || p == "/api/definitions/%2F") && r.Method == "POST":
+			s.record(r)
+			w.WriteHeader(http.StatusOK)
+		case p == "/api/users" && r.Method == "GET":
+			writeJSON(w, `[{"name":"admin","tags":"administrator","is_internal":false},{"name":"monitor","tags":["monitoring"],"is_internal":true}]`)
+		case p == "/api/users/admin" && r.Method == "GET":
+			writeJSON(w, `{"name":"admin","tags":"administrator","is_internal":false}`)
+		case p == "/api/users/alice" && r.Method == "GET":
+			writeJSON(w, `{"name":"alice","tags":["administrator"],"is_internal":false}`)
+		case p == "/api/users/leak" && r.Method == "PUT":
+			s.record(r)
+			w.WriteHeader(http.StatusBadRequest)
+			writeJSON(w, `{"error":"bad_request","reason":"validation failed"}`)
+		case strings.HasPrefix(p, "/api/users/") && (r.Method == "PUT" || r.Method == "DELETE"):
+			s.record(r)
+			w.WriteHeader(http.StatusNoContent)
+		case p == "/api/permissions" && r.Method == "GET":
+			writeJSON(w, `[{"user":"admin","vhost":"/","configure":".*","write":".*","read":".*"},{"user":"monitor","vhost":"staging","configure":"^$","write":"^$","read":".*"}]`)
+		case strings.HasPrefix(p, "/api/permissions/%2F/") && (r.Method == "PUT" || r.Method == "DELETE"):
+			s.record(r)
+			w.WriteHeader(http.StatusNoContent)
+		case p == "/api/feature-flags" && r.Method == "GET":
+			writeJSON(w, `[{"name":"quorum_queue","state":"enabled","stability":"stable","provided_by":"rabbitmq-server","desc":"Replicated queues"},{"name":"khepri_db","state":"disabled","stability":"experimental","provided_by":"rabbitmq-server","desc":"New metadata store"}]`)
+		case p == "/api/deprecated-features" && r.Method == "GET" && s.depFeatures.Load():
+			writeJSON(w, `{"deprecated_features":[{"name":"ram_node_type","deprecation_phase":"permitted_by_default","desc":"RAM nodes"},{"name":"global_qos","deprecation_phase":"deprecated","desc":"Global QoS"}]}`)
+		case p == "/api/deprecated-features/used" && r.Method == "GET" && s.depFeatures.Load():
+			writeJSON(w, `{"used":[{"name":"global_qos","deprecation_phase":"deprecated","desc":"Global QoS"}]}`)
 		default:
 			// Note: no /api/stream/* handlers — a 404 there exercises the
 			// version-gate mapping to UNSUPPORTED_OPERATION.
@@ -526,7 +600,7 @@ func TestExchangeDeclareAndPublish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "routed: true") {
+	if !strings.Contains(out, "sent: 1") || !strings.Contains(out, "routed: 1") {
 		t.Fatalf("publish output unexpected:\n%s", out)
 	}
 	var pbody map[string]any
@@ -537,7 +611,8 @@ func TestExchangeDeclareAndPublish(t *testing.T) {
 		t.Fatalf("publish body unexpected: %v", pbody)
 	}
 	env := runJSON(t, "rmq", "exchange", "publish", "ex1", "--payload", "aGVsbG8=", "--payload-encoding", "base64")
-	if env["data"].(map[string]any)["routed"] != true {
+	data := env["data"].(map[string]any)
+	if data["sent"].(float64) != 1 || data["routed"].(float64) != 1 {
 		t.Fatalf("publish JSON unexpected: %v", env["data"])
 	}
 }
@@ -728,6 +803,14 @@ func TestWriteReadonly(t *testing.T) {
 		{"rmq", "-c", "ro", "connection", "close", "a -> b"},
 		{"rmq", "-c", "ro", "vhost", "add", "x"},
 		{"rmq", "-c", "ro", "vhost", "delete", "x"},
+		{"rmq", "-c", "ro", "policy", "set", "p", "--pattern", ".*", "--definition", `{"a":1}`},
+		{"rmq", "-c", "ro", "policy", "delete", "p"},
+		{"rmq", "-c", "ro", "user", "add", "u", "--password", "x"},
+		{"rmq", "-c", "ro", "user", "passwd", "u", "--password", "x"},
+		{"rmq", "-c", "ro", "user", "delete", "u"},
+		{"rmq", "-c", "ro", "permission", "set", "u"},
+		{"rmq", "-c", "ro", "permission", "delete", "u"},
+		{"rmq", "-c", "ro", "definitions", "import", "--file", "x.json"},
 		{"rmq", "-c", "ro", "request", "PUT", "/api/vhosts/x"},
 	}
 	for _, args := range cases {
@@ -969,5 +1052,483 @@ func TestConnAddPasswordWarning(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "enc:v1:") {
 		t.Fatalf("config does not contain an encrypted password:\n%s", raw)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: policy / definitions / publish+get enhancements / user /
+// permission / whoami / featureflags / deprecatedfeatures
+// ---------------------------------------------------------------------------
+
+func TestPolicyLifecycle(t *testing.T) {
+	setupEnv(t)
+	s := newRmqServer(t)
+	s.addConn(t, "local")
+
+	out, err := runMuxcat(t, "rmq", "policy", "ls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The definition column is compact JSON.
+	if !strings.Contains(out, "ttl") || !strings.Contains(out, `{"message-ttl":60000}`) {
+		t.Fatalf("policy ls output unexpected:\n%s", out)
+	}
+
+	// --operator switches to the operator-policies endpoint.
+	out, err = runMuxcat(t, "rmq", "policy", "ls", "--operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "max-len") {
+		t.Fatalf("operator policy ls output unexpected:\n%s", out)
+	}
+
+	env := runJSON(t, "rmq", "policy", "show", "ttl")
+	if env["data"].(map[string]any)["name"] != "ttl" {
+		t.Fatalf("policy show JSON unexpected: %v", env["data"])
+	}
+
+	if _, err := runMuxcat(t, "rmq", "policy", "set", "ttl2",
+		"--pattern", "^tmp\\.", "--definition", `{"message-ttl":30000}`, "--priority", "2", "--apply-to", "queues"); err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(s.bodyOf("PUT", "/api/policies/%2F/ttl2"), &body); err != nil {
+		t.Fatalf("policy set body not recorded: %v", err)
+	}
+	def := body["definition"].(map[string]any)
+	if body["pattern"] != "^tmp\\." || body["apply-to"] != "queues" || body["priority"].(float64) != 2 || def["message-ttl"].(float64) != 30000 {
+		t.Fatalf("policy set body unexpected: %v", body)
+	}
+
+	// --operator set goes to the operator-policies endpoint.
+	if _, err := runMuxcat(t, "rmq", "policy", "set", "op1", "--operator",
+		"--pattern", ".*", "--definition", `{"max-length":10}`); err != nil {
+		t.Fatal(err)
+	}
+	if s.writeCount("PUT", "/api/operator-policies/%2F/op1") != 1 {
+		t.Fatal("operator policy set hit the wrong endpoint")
+	}
+
+	// Missing/invalid flags are usage errors and send nothing.
+	if _, err := runMuxcat(t, "rmq", "policy", "set", "x", "--pattern", ".*"); output.ToError(err).Code != output.CodeMissingArgument {
+		t.Fatalf("set w/o definition code = %v", output.ToError(err))
+	}
+	if _, err := runMuxcat(t, "rmq", "policy", "set", "x", "--pattern", ".*", "--definition", `{"a":1}`, "--apply-to", "bogus"); output.ToError(err).Code != output.CodeConfigInvalid {
+		t.Fatalf("set bogus apply-to code = %v", output.ToError(err))
+	}
+	if _, err := runMuxcat(t, "rmq", "policy", "set", "x", "--pattern", ".*", "--definition", "[1]"); output.ToError(err).Code != output.CodeConfigInvalid {
+		t.Fatalf("set non-object definition code = %v", output.ToError(err))
+	}
+	if s.writeCount("PUT", "/api/policies/%2F/x") != 0 {
+		t.Fatal("invalid policy set still sent a request")
+	}
+
+	if _, err := runMuxcat(t, "rmq", "policy", "delete", "ttl"); err != nil {
+		t.Fatal(err)
+	}
+	if s.writeCount("DELETE", "/api/policies/%2F/ttl") != 1 {
+		t.Fatal("policy delete endpoint not called")
+	}
+}
+
+func TestDefinitionsExportImport(t *testing.T) {
+	setupEnv(t)
+	s := newRmqServer(t)
+	s.addConn(t, "local")
+
+	// Export to --json keeps the raw document.
+	env := runJSON(t, "rmq", "definitions", "export")
+	if env["data"].(map[string]any)["rabbitmq_version"] != "4.3.1" {
+		t.Fatalf("export JSON not raw: %v", env["data"])
+	}
+
+	// Export --file writes the raw document (0600) and reports a message.
+	f := filepath.Join(t.TempDir(), "topology.json")
+	out, err := runMuxcat(t, "rmq", "definitions", "export", "--file", f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "exported definitions to") {
+		t.Fatalf("export --file output unexpected:\n%s", out)
+	}
+	raw, err := os.ReadFile(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(raw) || !strings.Contains(string(raw), "4.3.1") {
+		t.Fatalf("exported file content unexpected: %s", raw)
+	}
+
+	// Import posts the file content.
+	if _, err := runMuxcat(t, "rmq", "definitions", "import", "--file", f); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(s.bodyOf("POST", "/api/definitions"), raw) {
+		t.Fatal("import body does not match the file content")
+	}
+
+	// Invalid JSON is rejected locally, before any request.
+	bad := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(bad, []byte("{nope"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runMuxcat(t, "rmq", "definitions", "import", "--file", bad); output.ToError(err).Code != output.CodeConfigInvalid {
+		t.Fatalf("import bad JSON code = %v", output.ToError(err))
+	}
+	if s.writeCount("POST", "/api/definitions") != 1 {
+		t.Fatal("invalid JSON still reached the import endpoint")
+	}
+
+	// --vhost targets the per-vhost endpoint.
+	if _, err := runMuxcat(t, "rmq", "definitions", "import", "--vhost", "/", "--file", f); err != nil {
+		t.Fatal(err)
+	}
+	if s.writeCount("POST", "/api/definitions/%2F") != 1 {
+		t.Fatal("import --vhost hit the wrong endpoint")
+	}
+}
+
+func TestExchangePublishCountAndFile(t *testing.T) {
+	setupEnv(t)
+	s := newRmqServer(t)
+	s.addConn(t, "local")
+
+	// --count sends repeatedly and summarizes sent/routed.
+	out, err := runMuxcat(t, "rmq", "exchange", "publish", "ex1", "--payload", "hi", "--count", "5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "sent: 5") || !strings.Contains(out, "routed: 5") {
+		t.Fatalf("publish --count output unexpected:\n%s", out)
+	}
+	if s.writeCount("POST", "/api/exchanges/%2F/ex1/publish") != 5 {
+		t.Fatalf("publish calls = %d, want 5", s.writeCount("POST", "/api/exchanges/%2F/ex1/publish"))
+	}
+
+	// --payload-file reads the payload from disk.
+	dir := t.TempDir()
+	f := filepath.Join(dir, "msg.txt")
+	if err := os.WriteFile(f, []byte("file-payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runMuxcat(t, "rmq", "exchange", "publish", "ex1", "--payload-file", f); err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(s.bodyOf("POST", "/api/exchanges/%2F/ex1/publish"), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["payload"] != "file-payload" || body["payload_encoding"] != "string" {
+		t.Fatalf("publish --payload-file body unexpected: %v", body)
+	}
+
+	// base64 encoding encodes the file content.
+	if _, err := runMuxcat(t, "rmq", "exchange", "publish", "ex1", "--payload-file", f, "--payload-encoding", "base64"); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(s.bodyOf("POST", "/api/exchanges/%2F/ex1/publish"), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["payload"] != "ZmlsZS1wYXlsb2Fk" || body["payload_encoding"] != "base64" {
+		t.Fatalf("publish --payload-file base64 body unexpected: %v", body)
+	}
+
+	// Mutual exclusion / missing payload / bad count are usage errors.
+	if _, err := runMuxcat(t, "rmq", "exchange", "publish", "ex1", "--payload", "a", "--payload-file", f); output.ToError(err).Code != output.CodeConfigInvalid {
+		t.Fatalf("both payload sources code = %v", output.ToError(err))
+	}
+	if _, err := runMuxcat(t, "rmq", "exchange", "publish", "ex1"); output.ToError(err).Code != output.CodeMissingArgument {
+		t.Fatalf("no payload code = %v", output.ToError(err))
+	}
+	if _, err := runMuxcat(t, "rmq", "exchange", "publish", "ex1", "--payload", "a", "--count", "10001"); output.ToError(err).Code != output.CodeConfigInvalid {
+		t.Fatalf("count 10001 code = %v", output.ToError(err))
+	}
+
+	// A mid-loop failure stops and reports the partial count.
+	out, err = runMuxcat(t, "rmq", "exchange", "publish", "flaky", "--payload", "x", "--count", "5")
+	if err == nil {
+		t.Fatal("flaky publish should fail")
+	}
+	if !strings.Contains(out, "sent: 2") {
+		t.Fatalf("partial summary missing from output:\n%s", out)
+	}
+	if s.writeCount("POST", "/api/exchanges/%2F/flaky/publish") != 3 {
+		t.Fatalf("flaky publish calls = %d, want 3 (2 ok + 1 failed)", s.writeCount("POST", "/api/exchanges/%2F/flaky/publish"))
+	}
+
+	// An undecodable publish response fails after the send is counted.
+	out, err = runMuxcat(t, "rmq", "exchange", "publish", "badjson", "--payload", "x")
+	if err == nil {
+		t.Fatal("badjson publish should fail")
+	}
+	if !strings.Contains(out, "sent: 1") {
+		t.Fatalf("decode-failure partial summary missing:\n%s", out)
+	}
+}
+
+func TestUserLifecycle(t *testing.T) {
+	setupEnv(t)
+	s := newRmqServer(t)
+	s.addConn(t, "local")
+
+	// Both tags shapes (string on old servers, list on new) parse.
+	out, err := runMuxcat(t, "rmq", "user", "ls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "admin") || !strings.Contains(out, "administrator") || !strings.Contains(out, "monitoring") {
+		t.Fatalf("user ls output unexpected:\n%s", out)
+	}
+
+	env := runJSON(t, "rmq", "user", "show", "admin")
+	if env["data"].(map[string]any)["name"] != "admin" {
+		t.Fatalf("user show JSON unexpected: %v", env["data"])
+	}
+
+	// add with --password: stderr warning, plaintext nowhere in output.
+	const userPw = "us3r-pw"
+	stdout, stderr, err := runMuxcatSE(t, "rmq", "user", "add", "bob", "--password", userPw, "--tags", "administrator, management")
+	if err != nil {
+		t.Fatalf("user add failed: %v\n%s", err, stdout)
+	}
+	if !strings.Contains(stderr, "Warning: --password") {
+		t.Fatalf("stderr warning missing:\n%s", stderr)
+	}
+	if strings.Contains(stdout, userPw) || strings.Contains(stderr, userPw) {
+		t.Fatalf("user add leaks the password:\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(s.bodyOf("PUT", "/api/users/bob"), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["password"] != userPw || body["tags"] != "administrator,management" {
+		t.Fatalf("user add body unexpected: %v", body)
+	}
+
+	// add without a password (non-interactive) creates a login-less user.
+	out, err = runMuxcat(t, "rmq", "user", "add", "carol")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "no password set") {
+		t.Fatalf("user add w/o password output unexpected:\n%s", out)
+	}
+	body = map[string]any{}
+	if err := json.Unmarshal(s.bodyOf("PUT", "/api/users/carol"), &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["password"]; ok {
+		t.Fatalf("password field sent without one: %v", body)
+	}
+
+	// passwd changes the password and preserves the user's existing tags;
+	// non-interactive without --password fails.
+	if _, err := runMuxcat(t, "rmq", "user", "passwd", "alice", "--password", "n3w-pw"); err != nil {
+		t.Fatal(err)
+	}
+	body = map[string]any{}
+	if err := json.Unmarshal(s.bodyOf("PUT", "/api/users/alice"), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["password"] != "n3w-pw" || body["tags"] != "administrator" {
+		t.Fatalf("passwd body unexpected: %v", body)
+	}
+	if _, err := runMuxcat(t, "rmq", "user", "passwd", "alice"); output.ToError(err).Code != output.CodeMissingArgument {
+		t.Fatalf("passwd w/o password code = %v", output.ToError(err))
+	}
+
+	// An empty password is rejected even with the flag given explicitly.
+	if _, err := runMuxcat(t, "rmq", "user", "passwd", "alice", "--password", ""); output.ToError(err).Code != output.CodeConfigInvalid {
+		t.Fatalf("passwd empty password code = %v", output.ToError(err))
+	}
+
+	// add on an existing user refuses (never upserts / clears the password).
+	if _, err := runMuxcat(t, "rmq", "user", "add", "admin"); output.ToError(err).Code != output.CodeConfigInvalid {
+		t.Fatalf("user add existing code = %v", output.ToError(err))
+	}
+	if s.writeCount("PUT", "/api/users/admin") != 0 {
+		t.Fatal("user add wrote to an existing user")
+	}
+
+	if _, err := runMuxcat(t, "rmq", "user", "delete", "bob"); err != nil {
+		t.Fatal(err)
+	}
+	if s.writeCount("DELETE", "/api/users/bob") != 1 {
+		t.Fatal("user delete endpoint not called")
+	}
+}
+
+// A failed user add must not leak the submitted password through any
+// output channel (stdout, stderr, error message, hint).
+func TestUserAddErrorNoLeak(t *testing.T) {
+	setupEnv(t)
+	s := newRmqServer(t)
+	s.addConn(t, "local")
+
+	const pw = "sup3r-secret"
+	stdout, stderr, err := runMuxcatSE(t, "rmq", "user", "add", "leak", "--password", pw)
+	if err == nil {
+		t.Fatal("user add leak should fail")
+	}
+	if e := output.ToError(err); strings.Contains(e.Message, pw) || strings.Contains(e.Hint, pw) {
+		t.Fatalf("error leaks the password: %v", e)
+	}
+	if strings.Contains(stdout, pw) || strings.Contains(stderr, pw) {
+		t.Fatalf("output leaks the password:\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+}
+
+// A failure mid-write removes the files already written.
+func TestWritePayloadFilesInvalidBase64(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "payload")
+	arr := []any{
+		map[string]any{"payload": "aGVsbG8=", "payload_encoding": "base64"},
+		map[string]any{"payload": "!!!not-base64!!!", "payload_encoding": "base64"},
+	}
+	files, err := writePayloadFiles(path, arr)
+	if err == nil {
+		t.Fatal("invalid base64 should fail")
+	}
+	if len(files) != 0 {
+		t.Fatalf("failed write returned files: %v", files)
+	}
+	if _, statErr := os.Stat(path + ".0"); !os.IsNotExist(statErr) {
+		t.Fatalf("partial file left behind: %v", statErr)
+	}
+}
+
+func TestPermissionLifecycle(t *testing.T) {
+	setupEnv(t)
+	s := newRmqServer(t)
+	s.addConn(t, "local")
+
+	out, err := runMuxcat(t, "rmq", "permission", "ls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "admin") || !strings.Contains(out, "monitor") || !strings.Contains(out, "staging") {
+		t.Fatalf("permission ls output unexpected:\n%s", out)
+	}
+	// Client-side filters.
+	out, err = runMuxcat(t, "rmq", "permission", "ls", "--user", "monitor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "admin") || !strings.Contains(out, "monitor") {
+		t.Fatalf("permission ls --user output unexpected:\n%s", out)
+	}
+
+	if _, err := runMuxcat(t, "rmq", "permission", "set", "alice", "--configure", ".*", "--write", "^app\\.", "--read", ".*"); err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(s.bodyOf("PUT", "/api/permissions/%2F/alice"), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["configure"] != ".*" || body["write"] != "^app\\." || body["read"] != ".*" {
+		t.Fatalf("permission set body unexpected: %v", body)
+	}
+
+	if _, err := runMuxcat(t, "rmq", "permission", "delete", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if s.writeCount("DELETE", "/api/permissions/%2F/alice") != 1 {
+		t.Fatal("permission delete endpoint not called")
+	}
+}
+
+func TestQueueGetFile(t *testing.T) {
+	setupEnv(t)
+	s := newRmqServer(t)
+	s.addConn(t, "local")
+
+	dir := t.TempDir()
+
+	// A single message writes <path>, base64-decoded, 0600.
+	f1 := filepath.Join(dir, "one.bin")
+	env := runJSON(t, "rmq", "queue", "get", "q1", "--file", f1)
+	files := env["data"].(map[string]any)["files"].([]any)
+	if len(files) != 1 || files[0] != f1 {
+		t.Fatalf("queue get --file JSON unexpected: %v", env["data"])
+	}
+	raw, err := os.ReadFile(f1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "hello" {
+		t.Fatalf("payload file content = %q", raw)
+	}
+
+	// Several messages write <path>.0, <path>.1...
+	f2 := filepath.Join(dir, "multi.bin")
+	if _, err := runMuxcat(t, "rmq", "queue", "get", "q1", "--limit", "2", "--file", f2); err != nil {
+		t.Fatal(err)
+	}
+	b0, err0 := os.ReadFile(f2 + ".0")
+	b1, err1 := os.ReadFile(f2 + ".1")
+	if err0 != nil || err1 != nil {
+		t.Fatalf("multi payload files missing: %v %v", err0, err1)
+	}
+	if string(b0) != "hello" || string(b1) != "world" {
+		t.Fatalf("multi payload contents = %q / %q", b0, b1)
+	}
+}
+
+func TestWhoami(t *testing.T) {
+	setupEnv(t)
+	s := newRmqServer(t)
+	s.addConn(t, "local")
+
+	env := runJSON(t, "rmq", "whoami")
+	data := env["data"].(map[string]any)
+	if data["name"] != "admin" || data["tags"] != "administrator" {
+		t.Fatalf("whoami JSON unexpected: %v", data)
+	}
+}
+
+func TestFeatureFlagsLs(t *testing.T) {
+	setupEnv(t)
+	s := newRmqServer(t)
+	s.addConn(t, "local")
+
+	out, err := runMuxcat(t, "rmq", "featureflags", "ls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"quorum_queue", "enabled", "stable", "khepri_db", "experimental"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("featureflags ls output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestDeprecatedFeatures(t *testing.T) {
+	setupEnv(t)
+	s := newRmqServer(t)
+	s.addConn(t, "local")
+
+	out, err := runMuxcat(t, "rmq", "deprecatedfeatures", "ls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "ram_node_type") || !strings.Contains(out, "permitted_by_default") {
+		t.Fatalf("deprecatedfeatures ls output unexpected:\n%s", out)
+	}
+	out, err = runMuxcat(t, "rmq", "deprecatedfeatures", "used")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "global_qos") {
+		t.Fatalf("deprecatedfeatures used output unexpected:\n%s", out)
+	}
+
+	// A server without the endpoint (pre-3.13) maps 404 to
+	// UNSUPPORTED_OPERATION with the version hint.
+	s.depFeatures.Store(false)
+	_, err = runMuxcat(t, "rmq", "deprecatedfeatures", "ls")
+	e := output.ToError(err)
+	if e.Code != output.CodeUnsupportedOperation || !strings.Contains(e.Hint, "3.13") {
+		t.Fatalf("deprecatedfeatures 404 error = %v", e)
 	}
 }

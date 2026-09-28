@@ -1,6 +1,6 @@
 # rabbitmq connector
 
-RabbitMQ connector 通过 RabbitMQ Management HTTP API（HTTP Basic Auth：username + password）接入，实现为纯 `net/http` 客户端，**不是 AMQP 驱动**（符合 `CGO_ENABLED=0` 基线）。命令名 `rabbitmq`，别名 `rmq`。覆盖：连接管理、broker overview、节点、队列、交换机、绑定、AMQP 客户端连接、channel、consumer、stream、vhost、健康检查、原生请求透传（request）。其余管理端点可用 `rmq request` 透传。
+RabbitMQ connector 通过 RabbitMQ Management HTTP API（HTTP Basic Auth：username + password）接入，实现为纯 `net/http` 客户端，**不是 AMQP 驱动**（符合 `CGO_ENABLED=0` 基线）。命令名 `rabbitmq`，别名 `rmq`。覆盖：连接管理、broker overview 与 whoami、节点、队列、交换机、绑定、AMQP 客户端连接、channel、consumer、stream、vhost、policy、user、permission、definitions 导入导出、健康检查、feature flags / deprecated features、原生请求透传（request）。其余管理端点可用 `rmq request` 透传。
 
 版本基线 **RabbitMQ 3.8 ~ 4.x**，三条纪律：
 
@@ -62,7 +62,7 @@ RabbitMQ connector 通过 RabbitMQ Management HTTP API（HTTP Basic Auth：usern
 | `rmq queue declare <name>` | `--vhost --durable=true --auto-delete --type classic\|quorum\|stream --args '<json>'` | `PUT /api/queues/<v>/<name>`，body `{durable, auto_delete, arguments}`（`--type` 映射 `x-queue-type`，`--args` 合并进 arguments） | `{queue, vhost, declared: true}` + Message |
 | `rmq queue delete <name>`（别名 `del`/`rm`） | `--vhost --if-empty --if-unused` | `DELETE /api/queues/<v>/<name>`（两个 if-* 为 query 参数） | `{queue, vhost, deleted: true}` |
 | `rmq queue purge <name>` | `--vhost` | `DELETE /api/queues/<v>/<name>/contents` | `{queue, vhost, purged: true}` |
-| `rmq queue get <name>` | `--vhost --limit 1..50（默认 1） --ackmode（默认 ack_requeue_true）` | `POST /api/queues/<v>/<name>/get`，body `{count, ackmode, encoding:"auto", truncate:50000}` | `--json` 原样消息数组（payload 保持服务端编码）；文本列 `exchange, routing_key, redelivered, message_count, payload`，base64 payload 解码后展示、单条截断 1KiB 并标注 |
+| `rmq queue get <name>` | `--vhost --limit 1..50（默认 1） --ackmode（默认 ack_requeue_true） --file <path>` | `POST /api/queues/<v>/<name>/get`，body `{count, ackmode, encoding:"auto", truncate:50000}` | 默认：`--json` 原样消息数组（payload 保持服务端编码）；文本列 `exchange, routing_key, redelivered, message_count, payload`，base64 payload 解码后展示、单条截断 1KiB 并标注。`--file`：payload 落盘（单条写 `<path>`，多条写 `<path>.0/.1...`，base64 先解码成原始字节，0600），`--json` 改报 `{files, count}` |
 
 - type 列跨版本解析：4.x 读 `type` 字段 → 否则 `arguments.x-queue-type` → 否则 `classic`（3.8 默认）。
 - `queue get` 是**调试设施**，不走高吞吐场景。`--ackmode` 四值分两组：peek 语义 `ack_requeue_true`（默认）/`reject_requeue_true`（消息回队，非破坏，readonly 连接可用）；破坏语义 `ack_requeue_false`/`reject_requeue_false`（消息出队/丢弃，help 中有警告，readonly 连接按 `READONLY_VIOLATION` 拦截）。
@@ -75,9 +75,9 @@ RabbitMQ connector 通过 RabbitMQ Management HTTP API（HTTP Basic Auth：usern
 | `rmq exchange show <name>` | `--vhost` | `GET /api/exchanges/<v>/<name>` | 全量 JSON |
 | `rmq exchange declare <name>` | `--vhost --type direct\|fanout\|topic\|headers --durable=true --auto-delete --args` | `PUT /api/exchanges/<v>/<name>` | `{exchange, vhost, declared: true}` |
 | `rmq exchange delete <name>`（别名 `del`/`rm`） | `--vhost --if-unused` | `DELETE /api/exchanges/<v>/<name>` | `{exchange, vhost, deleted: true}` |
-| `rmq exchange publish <name>` | `--vhost --routing-key --payload（必填） --payload-encoding string\|base64 --props '<json>'` | `POST /api/exchanges/<v>/<name>/publish` | 服务端应答 `{"routed":...}` 原样；routed=false 时 Message 提示无队列绑定 |
+| `rmq exchange publish <name>` | `--vhost --routing-key --payload / --payload-file（互斥、必有其一，文件上限 1MB） --payload-encoding string\|base64 --count 1..10000 --props '<json>'` | `POST /api/exchanges/<v>/<name>/publish`（`--count` 循环发 N 次；首发即失败 sent=0 直接报错，已发过至少一条才停止并走 RenderPartial 报已发数量） | `{exchange, routing_key, sent, routed}`（routed = 服务端 routed=true 的次数）；routed=0 时 Message 提示无队列绑定 |
 
-- `exchange publish` 是**调试设施**：同步、无 confirm，不适合大消息或高频率。
+- `exchange publish` 是**调试设施**：同步、无 confirm，不适合大消息或高频率。`--payload-file` 内容在 `--payload-encoding base64` 时做 base64，string 时原样。
 
 ### binding 组
 
@@ -124,6 +124,62 @@ RabbitMQ connector 通过 RabbitMQ Management HTTP API（HTTP Basic Auth：usern
 | `rmq vhost add <name>` | `--description --tags a,b`（3.13+ 字段，仅设置时才发送） | `PUT /api/vhosts/<name>` | `{vhost, created: true}` |
 | `rmq vhost delete <name>`（别名 `del`/`rm`） | — | `DELETE /api/vhosts/<name>` | `{vhost, deleted: true}` |
 
+### whoami
+
+| 命令 | 端点 | data 形状 |
+|---|---|---|
+| `rmq whoami` | `GET /api/whoami` | Value `{name, tags}`（`--json` 为服务端原样） |
+
+### policy 组
+
+| 命令 | 参数 / flag | 端点 | data 形状 |
+|---|---|---|---|
+| `rmq policy ls` | `--vhost --operator` | `GET /api/policies[/<v>]`（`--operator` 切 `/api/operator-policies`） | 文本列 `name, vhost, pattern, apply_to, priority, definition`（definition 紧凑 JSON） |
+| `rmq policy show <name>` | `--vhost --operator` | `GET /api/policies/<v>/<name>`（`--operator` 切 `/api/operator-policies/<v>/<name>`） | 全量 JSON |
+| `rmq policy set <name>` | `--vhost --pattern --definition '<json>'（均必填） --priority 0 --apply-to all\|queues\|exchanges\|classic_queues\|quorum_queues\|streams --operator` | `PUT /api/policies/<v>/<name>`（`--operator` 切 `/api/operator-policies/<v>/<name>`），body `{pattern, definition, priority, apply-to}` | `{policy, vhost, set: true}` |
+| `rmq policy delete <name>`（别名 `del`/`rm`） | `--vhost --operator` | `DELETE /api/policies/<v>/<name>`（`--operator` 切 `/api/operator-policies/<v>/<name>`） | `{policy, vhost, deleted: true}` |
+
+### user 组
+
+| 命令 | 参数 / flag | 端点 | data 形状 |
+|---|---|---|---|
+| `rmq user ls` | — | `GET /api/users` | 文本列 `name, tags, is_internal`（tags 字符串/数组两种形状均容忍） |
+| `rmq user show <name>` | — | `GET /api/users/<name>` | 全量 JSON |
+| `rmq user add <name>` | `--password --tags a,b` | `PUT /api/users/<name>`，body `{password, tags}`（tags 逗号串；空密码省略字段）。**create-only**：先 GET 探测，用户已存在时报 `CONFIG_INVALID`，不会 upsert/清密码 | `{user, tags, created: true}` + Message（无密码时提示用户暂不能登录） |
+| `rmq user passwd <name>` | `--password` | 先 `GET /api/users/<name>` 取现有 tags 随 PUT 回传（改密码不洗角色），再 `PUT /api/users/<name>` 覆盖密码；空密码报 `CONFIG_INVALID`（否则服务端走 clear_password 静默清密码） | `{user, password_changed: true}` |
+| `rmq user delete <name>`（别名 `del`/`rm`） | — | `DELETE /api/users/<name>` | `{user, deleted: true}` |
+
+- 密码处理与 conn add 同规：`--password` 明文 flag 打 stderr 警告；TTY 下无 flag 走 huh 密码框；任何输出不回显密码。`user passwd` 非交互缺 `--password` 报 `MISSING_ARGUMENT`。
+
+### permission 组
+
+| 命令 | 参数 / flag | 端点 | data 形状 |
+|---|---|---|---|
+| `rmq permission ls` | `--vhost --user`（客户端过滤，仅作用于文本表格；`--json` 恒为未过滤原数组） | `GET /api/permissions` | 文本列 `user, vhost, configure, write, read` |
+| `rmq permission set <user>` | `--vhost --configure --write --read`（三段正则，默认空串） | `PUT /api/permissions/<v>/<user>` | `{user, vhost, granted: true}` |
+| `rmq permission delete <user>`（别名 `del`/`rm`） | `--vhost` | `DELETE /api/permissions/<v>/<user>` | `{user, vhost, revoked: true}` |
+
+### definitions 组
+
+环境间拓扑迁移 / 种子数据：整 broker（或单 vhost）的用户、vhost、权限、队列、交换机、绑定、策略打成一个 JSON 文档导出/导入。
+
+| 命令 | 参数 / flag | 端点 | data 形状 |
+|---|---|---|---|
+| `rmq definitions export` | `--vhost --file` | `GET /api/definitions[/<v>]` | 默认 stdout：`--json` 原样文档，文本模式 pretty JSON；`--file` 写文件（0600），Value `{file, bytes}` + Message |
+| `rmq definitions import` | `--vhost --file <path\|->（缺省/- 读 stdin）` | `POST /api/definitions[/<v>]` | `{imported: true, bytes}` + Message |
+
+- import 先本地 `json.Valid` 校验（不合法报 `CONFIG_INVALID`，不发请求）；导入是合并语义，不删除文件中不存在的对象；写操作，readonly 拦截。
+
+### featureflags / deprecatedfeatures（只读）
+
+| 命令 | 端点 | data 形状 |
+|---|---|---|
+| `rmq featureflags ls` | `GET /api/feature-flags` | 文本列 `name, state, stability, provided_by, description` |
+| `rmq deprecatedfeatures ls` | `GET /api/deprecated-features`（3.13+，404 走门控映射） | 文本列 `name, state, desc`（state 缺省回退 deprecation_phase） |
+| `rmq deprecatedfeatures used` | `GET /api/deprecated-features/used` | 同上，仅列出实际使用中的 |
+
+- deprecated-features 响应裸数组与对象包装（`deprecated_features`/`used`）两种形状均容忍。
+
 ### health
 
 ```
@@ -150,7 +206,7 @@ rmq request <method> <path> [--file <path|->] [--content-type <mime>]
 | `/api/stream/*`（stream connection/publisher/consumer） | 3.9 | 404 → `UNSUPPORTED_OPERATION`，hint 含 3.9 |
 | super stream（SUPER 列归属） | 3.11 | 仅命名启发式，无额外端点 |
 | vhost description/tags | 3.13 | `vhost add` 仅在 flag 设置时发送这两个字段 |
-| `/api/deprecated-features` | 3.13 | 首期无封装命令，`rmq request` 可达；404 → 门控映射 |
+| `/api/deprecated-features`（deprecatedfeatures ls/used） | 3.13 | 404 → `UNSUPPORTED_OPERATION`，hint 含 3.13 |
 | `health is-in-service` / `ready-to-serve-clients` | 4.0 | 404 → `UNSUPPORTED_OPERATION`，hint 含 4.0 |
 | 分页参数（page/page_size） | 3.12 | **不使用**，见「已知限制」 |
 
@@ -169,7 +225,7 @@ RabbitMQ 错误体为 `{"error":"...","reason":"..."}`，classifyStatus 解析�
 | 连接拒绝、无此主机 | `CONNECT_FAILED` | 3 |
 | 超时（客户端或 context deadline） | `TIMEOUT` | 3 |
 | 其余非 2xx（如 400 bad_request） | `QUERY_ERROR`（reason 进消息与 hint） | 5 |
-| readonly 连接的写操作（declare/delete/purge/publish/bind/unbind/close/vhost add/delete、queue get 破坏性 ackmode、request 非 GET/HEAD） | `READONLY_VIOLATION` | 5 |
+| readonly 连接的写操作（declare/delete/purge/publish/bind/unbind/close/vhost add/delete、queue get 破坏性 ackmode、policy set/delete、user add/passwd/delete、permission set/delete、definitions import、request 非 GET/HEAD） | `READONLY_VIOLATION` | 5 |
 | request 的非 2xx 完成交换 | 不报错（data 原样报告 status） | 0 |
 
 ## 已知限制
@@ -178,7 +234,7 @@ RabbitMQ 错误体为 `{"error":"...","reason":"..."}`，classifyStatus 解析�
 - **单次响应体上限 64MB**。
 - **stream 门控**依赖 404 映射，不做预检；3.8 服务器上 `stream ls`（复用 /api/queues）仍可用但恒为空列表，`stream connection/publisher/consumer` 报 `UNSUPPORTED_OPERATION`。
 - **SUPER 列为命名启发式**：按 `<super-stream>-<数字>` 后缀归属，普通 stream 若恰好以此模式命名会误归属。
-- **`exchange publish` / `queue get` 仅调试用**：同步、无 confirm、无高吞吐；payload 服务端截断 50000 字节，文本展示再截 1KiB（`--json` 保留服务端原值）。
+- **`exchange publish` / `queue get` 仅调试用**：同步、无 confirm、无高吞吐；payload 服务端截断 50000 字节，文本展示再截 1KiB（`--json` 保留服务端原值）；publish `--payload-file` 上限 1MB。
 - 写操作守卫只有 readonly 连接（`READONLY_VIOLATION`），不设 `--yes` 确认（显式命令即意图）。
 - TLS 由 url scheme 决定，不支持自定义 CA / 跳过证书校验（后续迭代按需加）。
-- 权限模型（users/permissions/policies/federation/shovel）首期未封装，用 `rmq request` 透传。
+- federation/shovel/limits 等其余管理面未封装，用 `rmq request` 透传可达。
