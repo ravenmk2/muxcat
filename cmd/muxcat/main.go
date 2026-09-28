@@ -6,6 +6,7 @@ import (
 	"github.com/ravenmk2/muxcat/internal/cli"
 	// Register built-in connectors.
 	_ "github.com/ravenmk2/muxcat/internal/connector/amqp"
+	_ "github.com/ravenmk2/muxcat/internal/connector/emqx"
 	_ "github.com/ravenmk2/muxcat/internal/connector/etcd"
 	_ "github.com/ravenmk2/muxcat/internal/connector/jenkins"
 	_ "github.com/ravenmk2/muxcat/internal/connector/mysql"

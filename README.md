@@ -35,7 +35,7 @@ and read the same output.
 | etcd | ✅ | 3.x |
 | RabbitMQ | ✅ | 3.8 ~ 4.x |
 | AMQP | ✅ | 0.9.1 / 1.0 |
-| EMQX | 📋 | — |
+| EMQX | ✅ | 5.x (≤ 5.8.6) |
 | OpenObserve | ✅ | 0.x / 1.0 |
 | Jenkins | ✅ | 2.x LTS |
 
