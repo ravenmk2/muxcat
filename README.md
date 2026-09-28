@@ -23,18 +23,21 @@ and read the same output.
 
 ✅ Available · 📋 Planned
 
-| Connector | Status |
-|---|---|
-| MySQL | ✅ |
-| Postgres | 📋 |
-| SQLite | ✅ |
-| Redis | ✅ |
-| MongoDB | 📋 |
-| Elasticsearch | 📋 |
-| Nacos (2.x / 3.x) | ✅ |
-| etcd | ✅ |
-| RabbitMQ | ✅ |
-| AMQP | 📋 |
-| EMQX | 📋 |
-| OpenObserve | ✅ |
-| Jenkins | ✅ |
+| Connector | Status | Supported versions |
+|---|---|---|
+| MySQL | ✅ | 5.7+ / 8.x |
+| Postgres | 📋 | — |
+| SQLite | ✅ | 3.x |
+| Redis | ✅ | 6+ |
+| MongoDB | 📋 | — |
+| Elasticsearch | 📋 | — |
+| Nacos | ✅ | 2.x / 3.x |
+| etcd | ✅ | 3.x |
+| RabbitMQ | ✅ | 3.8 ~ 4.x |
+| AMQP | 📋 | — |
+| EMQX | 📋 | — |
+| OpenObserve | ✅ | 0.x / 1.0 |
+| Jenkins | ✅ | 2.x LTS |
+
+Version ranges are design baselines. Per-feature compatibility details
+live in each connector's doc under `docs/connectors/`.
