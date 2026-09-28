@@ -34,7 +34,7 @@ and read the same output.
 | Nacos | ✅ | 2.x / 3.x |
 | etcd | ✅ | 3.x |
 | RabbitMQ | ✅ | 3.8 ~ 4.x |
-| AMQP | 📋 | — |
+| AMQP | ✅ | 0.9.1 / 1.0 |
 | EMQX | 📋 | — |
 | OpenObserve | ✅ | 0.x / 1.0 |
 | Jenkins | ✅ | 2.x LTS |
