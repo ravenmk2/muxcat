@@ -26,7 +26,7 @@ and read the same output.
 | Connector | Status | Supported versions |
 |---|---|---|
 | MySQL | ✅ | 5.7+ / 8.x |
-| Postgres | 📋 | — |
+| Postgres | ✅ | 12+ |
 | SQLite | ✅ | 3.x |
 | Redis | ✅ | 6+ |
 | MongoDB | 📋 | — |
@@ -40,5 +40,5 @@ and read the same output.
 | OpenObserve | ✅ | 0.x / 1.0 |
 | Jenkins | ✅ | 2.x LTS |
 
-Version ranges are design baselines. Per-feature compatibility details
-live in each connector's doc under `docs/connectors/`.
+Design baselines, not hard limits — see `docs/connectors/` for
+per-connector compatibility notes.
