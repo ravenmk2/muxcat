@@ -85,6 +85,7 @@ muxcat/
 │       ├── amqp/          # AMQP connector（0.9.1 + 1.0 双协议，见 docs/connectors/amqp.md）
 │       ├── etcd/          # etcd connector（见 docs/connectors/etcd.md）
 │       ├── jenkins/       # Jenkins connector（见 docs/connectors/jenkins.md）
+│       ├── mqtt/          # MQTT connector（3.1.1 + 5.0 双协议，见 docs/connectors/mqtt.md）
 │       ├── mysql/         # MySQL connector（见 docs/connectors/mysql.md）
 │       ├── nacos/         # Nacos connector（见 docs/connectors/nacos.md）
 │       ├── openobserve/   # OpenObserve connector（见 docs/connectors/openobserve.md）

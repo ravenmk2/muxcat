@@ -60,6 +60,7 @@ muxcat/
 | RabbitMQ | ✅ |
 | AMQP | ✅ |
 | EMQX | ✅ |
+| MQTT | ✅ |
 | Jenkins | ✅ |
 | Nacos | ✅ |
 | TUI | 📋 |

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ravenmk2/muxcat/schema/mqtt.schema.json",
+  "title": "mqtt connector config (mqtt.json)",
+  "allOf": [
+    { "$ref": "connector-common.schema.json#/$defs/connectorDoc" }
+  ],
+  "properties": {
+    "instances": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/mqttInstance" }
+    },
+    "connections": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/mqttConnection" }
+    }
+  },
+  "$defs": {
+    "mqttInstance": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "url": { "type": "string", "minLength": 1 },
+        "protocolVersion": { "type": "integer", "enum": [3, 5] }
+      },
+      "additionalProperties": false
+    },
+    "mqttConnection": {
+      "type": "object",
+      "required": ["instance"],
+      "properties": {
+        "instance": { "type": "string", "minLength": 1 },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "clientId": { "type": "string" },
+        "readonly": { "type": "boolean" },
+        "timeout": { "type": "string" },
+        "tlsSkipVerify": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

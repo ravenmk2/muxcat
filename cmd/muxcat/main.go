@@ -9,6 +9,7 @@ import (
 	_ "github.com/ravenmk2/muxcat/internal/connector/emqx"
 	_ "github.com/ravenmk2/muxcat/internal/connector/etcd"
 	_ "github.com/ravenmk2/muxcat/internal/connector/jenkins"
+	_ "github.com/ravenmk2/muxcat/internal/connector/mqtt"
 	_ "github.com/ravenmk2/muxcat/internal/connector/mysql"
 	_ "github.com/ravenmk2/muxcat/internal/connector/nacos"
 	_ "github.com/ravenmk2/muxcat/internal/connector/openobserve"

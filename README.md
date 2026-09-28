@@ -36,6 +36,7 @@ and read the same output.
 | RabbitMQ | ✅ | 3.8 ~ 4.x |
 | AMQP | ✅ | 0.9.1 / 1.0 |
 | EMQX | ✅ | 5.x (≤ 5.8.6) |
+| MQTT | ✅ | 3.1.1 / 5.0 |
 | OpenObserve | ✅ | 0.x / 1.0 |
 | Jenkins | ✅ | 2.x LTS |
 
