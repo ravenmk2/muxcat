@@ -3,6 +3,7 @@ module github.com/ravenmk2/muxcat
 go 1.26.4
 
 require (
+	github.com/Azure/go-amqp v1.7.0
 	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/charmbracelet/bubbles v0.21.1-0.20250623103423-23b8fd6302d7
 	github.com/charmbracelet/huh v1.0.0
@@ -13,6 +14,8 @@ require (
 	github.com/mattn/go-isatty v0.0.24
 	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/muesli/termenv v0.16.0
+	github.com/rabbitmq/amqp091-go v1.15.0
+	github.com/rabbitmq/rabbitmq-amqp-go-client v1.4.0
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/spf13/cobra v1.10.2
@@ -44,6 +47,7 @@ require (
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
@@ -58,6 +62,8 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.7.2 // indirect
+	go.opentelemetry.io/otel v1.44.0 // indirect
+	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/net v0.58.0 // indirect

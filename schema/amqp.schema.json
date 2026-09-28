@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ravenmk2/muxcat/schema/amqp.schema.json",
+  "title": "amqp connector config (amqp.json)",
+  "allOf": [
+    { "$ref": "connector-common.schema.json#/$defs/connectorDoc" }
+  ],
+  "properties": {
+    "instances": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/amqpInstance" }
+    },
+    "connections": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/amqpConnection" }
+    }
+  },
+  "$defs": {
+    "amqpInstance": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "url": { "type": "string", "minLength": 1 },
+        "protocol": { "type": "string", "enum": ["0.9.1", "1.0"] }
+      },
+      "additionalProperties": false
+    },
+    "amqpConnection": {
+      "type": "object",
+      "required": ["instance"],
+      "properties": {
+        "instance": { "type": "string", "minLength": 1 },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "vhost": { "type": "string" },
+        "readonly": { "type": "boolean" },
+        "timeout": { "type": "string" },
+        "tlsSkipVerify": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

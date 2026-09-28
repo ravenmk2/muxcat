@@ -82,6 +82,7 @@ muxcat/
 │   ├── upgrade/           # 自更新：GitHub release 查询、带重试下载、checksum 校验、自替换（见 docs/upgrade.md）
 │   └── connector/
 │       ├── registry.go    # connector 注册表
+│       ├── amqp/          # AMQP connector（0.9.1 + 1.0 双协议，见 docs/connectors/amqp.md）
 │       ├── etcd/          # etcd connector（见 docs/connectors/etcd.md）
 │       ├── jenkins/       # Jenkins connector（见 docs/connectors/jenkins.md）
 │       ├── mysql/         # MySQL connector（见 docs/connectors/mysql.md）
