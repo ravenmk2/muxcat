@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ravenmk2/muxcat/schema/postgres.schema.json",
+  "title": "postgres connector config (postgres.json)",
+  "allOf": [
+    { "$ref": "connector-common.schema.json#/$defs/connectorDoc" }
+  ],
+  "properties": {
+    "instances": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/postgresInstance" }
+    },
+    "connections": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/postgresConnection" }
+    }
+  },
+  "$defs": {
+    "postgresInstance": {
+      "type": "object",
+      "required": ["host"],
+      "properties": {
+        "host": { "type": "string", "minLength": 1 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "tls": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "postgresConnection": {
+      "type": "object",
+      "required": ["instance"],
+      "properties": {
+        "instance": { "type": "string", "minLength": 1 },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "database": { "type": "string" },
+        "readonly": { "type": "boolean" },
+        "timeout": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

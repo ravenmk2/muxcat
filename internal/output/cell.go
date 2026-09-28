@@ -15,11 +15,15 @@ import (
 // a per-connector opt-in: a nil *CellStyle on Result means the legacy
 // default formatting.
 type CellStyle struct {
-	NullText   string       // rendering for SQL NULL, e.g. "NULL"; legacy default is ""
-	BinaryHex  bool         // binary-typed []byte -> 0x uppercase hex; legacy default false (raw string conversion)
-	DateLayout string       // Go layout for time.Time on DATE columns, e.g. "2006-01-02"
-	TimeLayout string       // Go layout for other time.Time, e.g. "2006-01-02 15:04:05.999999"
-	Palette    *CellPalette // per-category lipgloss styles; nil = no cell coloring
+	NullText   string // rendering for SQL NULL, e.g. "NULL"; legacy default is ""
+	BinaryHex  bool   // binary-typed []byte -> 0x uppercase hex; legacy default false (raw string conversion)
+	DateLayout string // Go layout for time.Time on DATE columns, e.g. "2006-01-02"
+	TimeLayout string // Go layout for other time.Time, e.g. "2006-01-02 15:04:05.999999"
+	// TimeTZLayout optionally overrides TimeLayout for timezone-aware
+	// temporal types (DatabaseTypeName containing "TZ", e.g. TIMESTAMPTZ);
+	// empty falls back to TimeLayout.
+	TimeTZLayout string
+	Palette      *CellPalette // per-category lipgloss styles; nil = no cell coloring
 	// ColumnStyle optionally customizes the cells of a named column
 	// (value-based coloring for semantic columns, e.g. a status flag).
 	// It returns the rendered cell and true to take over, or ("", false)
@@ -54,6 +58,8 @@ func (s *CellStyle) FormatCell(v any, dbType string, color bool) string {
 		layout := s.TimeLayout
 		if strings.EqualFold(dbType, "DATE") && s.DateLayout != "" {
 			layout = s.DateLayout
+		} else if s.TimeTZLayout != "" && strings.Contains(strings.ToUpper(dbType), "TZ") {
+			layout = s.TimeTZLayout
 		}
 		if layout == "" {
 			return fmt.Sprint(val)
@@ -119,11 +125,13 @@ func forceColorProfile() {
 }
 
 // binaryTypes are the DatabaseTypeName() tokens whose []byte values render
-// as 0x hex (the official mysql cli's --binary-as-hex semantics).
+// as 0x hex (the official mysql cli's --binary-as-hex semantics; BYTEA is
+// the PostgreSQL counterpart).
 var binaryTypes = map[string]bool{
 	"BINARY": true, "VARBINARY": true,
 	"TINYBLOB": true, "BLOB": true, "MEDIUMBLOB": true, "LONGBLOB": true,
 	"GEOMETRY": true, "BIT": true,
+	"BYTEA": true,
 }
 
 // IsBinaryType reports whether a database type name is a binary type.

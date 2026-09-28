@@ -89,6 +89,7 @@ muxcat/
 │       ├── mysql/         # MySQL connector（见 docs/connectors/mysql.md）
 │       ├── nacos/         # Nacos connector（见 docs/connectors/nacos.md）
 │       ├── openobserve/   # OpenObserve connector（见 docs/connectors/openobserve.md）
+│       ├── postgres/      # PostgreSQL connector（见 docs/connectors/postgres.md）
 │       ├── rabbitmq/      # RabbitMQ connector（见 docs/connectors/rabbitmq.md）
 │       ├── redis/         # Redis connector（见 docs/connectors/redis.md）
 │       └── sqlite/        # SQLite connector（见 docs/connectors/sqlite.md）
