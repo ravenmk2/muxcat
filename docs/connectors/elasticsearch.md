@@ -1,6 +1,6 @@
 # elasticsearch connector
 
-Elasticsearch connector 通过 Elasticsearch REST API 接入，实现为纯 `net/http` 客户端，无外部驱动依赖（符合 `CGO_ENABLED=0` 基线）。命令名 `elasticsearch`，别名 `es`。**支持 Elasticsearch 7/8/9**。本期范围：连接管理（conn 组）与原生请求透传（request）；index/document 等语法糖命令不在本期范围——任意端点均可经 `request` 透传。
+Elasticsearch connector 通过 Elasticsearch REST API 接入，实现为纯 `net/http` 客户端，无外部驱动依赖（符合 `CGO_ENABLED=0` 基线）。命令名 `elasticsearch`，别名 `es`。**支持 Elasticsearch 7/8/9**。覆盖：连接管理（conn 组）、搜索（search）、索引/文档/集群只读检查（index、doc、cluster 组）与原生请求透传（request）。写入/管理类操作（索引创建、文档写入等）不在本期范围——经 `request` 透传。
 
 ## 配置模型（elasticsearch.json）
 
@@ -54,6 +54,24 @@ Elasticsearch connector 通过 Elasticsearch REST API 接入，实现为纯 `net
 | `es conn default <name>` | 设为默认连接 |
 | `es conn test [name]` | `GET /` 探测：认证检查 + 读 `version.number`/`cluster_name`，返回 `{ok, latency_ms, version, cluster_name}`（缺 `X-Elastic-Product` 头时附 warning，不失败）；name 缺省用默认连接 |
 
+### search
+
+| 命令 | 参数 / flag | data 形状 |
+|---|---|---|
+| `es search <index>` | `-q/--query`（Lucene query_string）、`--file <path\|->`（完整 DSL body，`-` 读 stdin，stdin 为 TTY 时拒绝）、`--size`（默认 10）、`--from`（默认 0）、`--sort <field:asc\|desc>`（可重复，缺省 order 为 asc） | 始终 `POST /<index>/_search`。无 flag 时 match_all；`-q` 模式由客户端用 encoding/json 构造 DSL（不做字符串拼接）。`--query` 与 `--file` 互斥；`--file` 与 `--size/--from/--sort` 互斥（DSL body 自带分页排序）——均报 `CONFIG_INVALID`。文本模式渲染表格：`_id`、`_score` + 各 hit `_source` 顶层标量键的有序并集（上限 15 列；非标量值渲染为紧凑 JSON，缺失键为空格）。`hits.total` 兼容两种形态（7.x 裸数字与 8/9 `{"value","relation"}` 对象）；`relation=gte` 时消息为 `total >= N`。`--json` 为原始响应体；`meta.truncated` 在返回数 < total 时置位 |
+
+### index / doc / cluster 组
+
+| 命令 | 说明 |
+|---|---|
+| `es index ls` | `GET /_cat/indices?format=json&h=...&s=index`；表格 `name,health,status,docs,size,pri,rep`（_cat 数值字段为字符串，渲染前转 int；size 保留人类可读串） |
+| `es index show <name>` | `GET /<index>`；文本 Value 为摘要（settings 的 shards/replicas、mappings 顶层字段列表与计数、aliases 列表）；`--json` 为原始 body |
+| `es doc get <index> <id>` | `GET /<index>/_doc/<id>`；文本为 `_index/_id/_version` 头部行 + pretty `_source`；404 报 `QUERY_ERROR` + "document not found" hint（服务端 reason 透传） |
+| `es cluster health` | `GET /_cluster/health`；Value 为稳定字段集（status、cluster_name、node/shard 计数、timed_out 等） |
+| `es cluster nodes` | `GET /_cat/nodes?format=json&h=...&s=name`；表格 `name,ip,role,master,version,heap%,ram%,cpu,load_1m`（数值转换同上） |
+
+以上全部为只读命令，readonly 连接均可执行（search 的 POST 是查询语义，不受 readonly 的 GET/HEAD 限制约束——该约束仅作用于 request 透传）。
+
 ### request
 
 | 命令 | 参数 / flag | 说明 |
@@ -69,14 +87,15 @@ Elasticsearch connector 通过 Elasticsearch REST API 接入，实现为纯 `net
 | 连接拒绝、无此主机 | `CONNECT_FAILED` | 3 |
 | TLS 证书校验失败（自签名） | `CONNECT_FAILED`（hint 指向 --insecure-skip-verify） | 3 |
 | 超时（客户端或 context deadline） | `TIMEOUT` | 3 |
-| `--url` 缺 scheme / 内嵌凭据、password 与 apikey 同给、`--compat` 非 7\|8、method/path 非法 | `CONFIG_INVALID` | 2 |
+| `--url` 缺 scheme / 内嵌凭据、password 与 apikey 同给、`--compat` 非 7\|8、method/path 非法、search 的 `--query` 与 `--file` 或分页 flag 冲突 | `CONFIG_INVALID` | 2 |
 | readonly 连接的非 GET/HEAD 请求 | `READONLY_VIOLATION` | 5 |
 | 非 TTY 缺 `--url`、非 TTY `conn rm` 缺 `--yes`、`--file -` 但 stdin 是 TTY | `MISSING_ARGUMENT` | 2 |
 
 ## 已知限制
 
-- 无客户端版本适配层：索引/文档/查询语法糖命令不在本期，全部经 `request` 透传，请求体语义由用户按服务端版本把握。
+- 无客户端版本适配层：本期覆盖的 API（_search、_cat、_cluster/health、GET /<index>、_doc）在 ES 7/8/9 字节级一致；其余写入/管理类操作经 `request` 透传，请求体语义由用户按服务端版本把握。
+- `search` 文本表格的 `_source` 列上限 15 列（取键名排序并集），宽文档用 `--json` 取原始响应；`--file` 模式的分页/排序由 DSL body 自带，`--size/--from/--sort` 不与其组合。
 - `--compat` 不在客户端与服务端版本对账；不兼容时依赖服务端 406 按 raw 语义呈现。
 - 单次响应体上限 64MB；错误消息中的 body 截断 512 字符。
-- 大结果集需用户侧分页（`from/size`、search_after、scroll、PIT 等），经 `request` 自行组织。
+- 大结果集需用户侧分页（`--size/--from`、search_after、scroll、PIT 等），`search` 仅做 size/from 分页，深度翻页用 `request` 自行组织。
 - TLS 支持系统 CA 或 `--insecure-skip-verify`，不支持钉选自定义 CA 证书。

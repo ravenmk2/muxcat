@@ -1,8 +1,7 @@
 // Package elasticsearch implements muxcat's Elasticsearch connector: a plain
 // net/http client for the Elasticsearch REST API (basic auth or API key).
-// Connection management, a connectivity probe (conn test), and raw request
-// passthrough are covered; index/document sugar commands are out of scope
-// for this iteration — use request to pass any endpoint through.
+// Connection management, a connectivity probe (conn test), search, index /
+// document / cluster inspection, and raw request passthrough are covered.
 package elasticsearch
 
 import (
@@ -30,19 +29,25 @@ with no external driver. Supports Elasticsearch 7/8/9.
 Quickstart:
   1. muxcat elasticsearch conn add local --url https://es.example.com:9200 --username elastic --password s3cret --set-default
   2. muxcat es conn test
-  3. muxcat es request GET /_cat/indices
-  4. muxcat es request POST /my-index/_search --file query.json
+  3. muxcat es search my-index --query "level:error" --size 20
+  4. muxcat es index ls
+  5. muxcat es request GET /_cat/indices
 
 A connection carries credentials (basic auth or an API key, encrypted at
-rest, never echoed) and policies: readonly allows GET/HEAD requests only.
-The command name is elasticsearch (alias es). Index/document sugar
-commands are out of scope — request passes any endpoint through.`,
+rest, never echoed) and policies: readonly allows all read commands
+(search, index, doc, cluster) and GET/HEAD request passthrough. The
+command name is elasticsearch (alias es). Anything not covered by a
+dedicated command can be passed through with request.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
 	}
 	c.AddCommand(
 		newConnCmd(),
+		newSearchCmd(),
+		newIndexCmd(),
+		newDocCmd(),
+		newClusterCmd(),
 		newRequestCmd(),
 	)
 	return c
