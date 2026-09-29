@@ -39,6 +39,7 @@
         "password": { "type": "string" },
         "authSource": { "type": "string" },
         "database": { "type": "string" },
+        "readonly": { "type": "boolean" },
         "timeout": { "type": "string" }
       },
       "additionalProperties": false

@@ -25,9 +25,9 @@ func newConnCmd() *cobra.Command {
 		Short: "Manage mongodb connections",
 		Long: `Manage mongodb connections. conn add creates a same-named instance
 (endpoint: hosts, tls, replicaSet) and connection (credentials,
-authSource, default database) in one step. Passwords are stored
-encrypted and never echoed by ls/show. The default connection is used
-when -c/--conn is not passed.`,
+authSource, default database, readonly marker) in one step. Passwords
+are stored encrypted and never echoed by ls/show. The default
+connection is used when -c/--conn is not passed.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -82,6 +82,7 @@ func newConnAddCmd() *cobra.Command {
 			authSource := cli.FlagString(cmd, "auth-source")
 			database := cli.FlagString(cmd, "database")
 			tlsOn := cli.FlagBool(cmd, "tls")
+			readonly := cli.FlagBool(cmd, "readonly")
 			replicaSet := ""
 			passwordFromURI := false
 			if uri := strings.TrimSpace(cli.FlagString(cmd, "uri")); uri != "" {
@@ -143,6 +144,9 @@ func newConnAddCmd() *cobra.Command {
 				if !cmd.Flags().Changed("tls") {
 					tlsOn = form.tls
 				}
+				if !cmd.Flags().Changed("readonly") {
+					readonly = form.readonly
+				}
 			}
 			if port < 1 || port > 65535 {
 				return output.NewError(output.CodeConfigInvalid,
@@ -194,6 +198,7 @@ func newConnAddCmd() *cobra.Command {
 				Password:   encPassword,
 				AuthSource: authSource,
 				Database:   database,
+				Readonly:   readonly,
 				Timeout:    timeout,
 			}
 			if cli.FlagBool(cmd, "set-default") || cfg.DefaultConnection == "" {
@@ -214,6 +219,7 @@ func newConnAddCmd() *cobra.Command {
 	c.Flags().String("auth-source", "", "authentication database (default: admin when a username is set)")
 	c.Flags().String("database", "", "default database (empty = none selected)")
 	c.Flags().Bool("tls", false, "require a TLS encrypted connection")
+	c.Flags().Bool("readonly", false, "mark the connection read-only (write commands will refuse it)")
 	c.Flags().String("timeout", "", "command timeout for this connection, overrides the global --timeout (e.g. 5s)")
 	c.Flags().Bool("set-default", false, "set as the default connection")
 	c.Flags().String("uri", "", "mongodb:// URI supplying defaults (explicit flags override it)")
@@ -229,6 +235,7 @@ type addForm struct {
 	authSource string
 	database   string
 	tls        bool
+	readonly   bool
 }
 
 // promptAddForm fills in missing arguments with a huh form, only on a TTY.
@@ -257,6 +264,7 @@ func promptAddForm() (addForm, error) {
 		huh.NewInput().Title("AuthSource (optional)").Value(&form.authSource),
 		huh.NewInput().Title("Database (optional)").Value(&form.database),
 		huh.NewConfirm().Title("TLS?").Value(&form.tls),
+		huh.NewConfirm().Title("Read-only?").Value(&form.readonly),
 	))
 	if err := f.Run(); err != nil {
 		return form, err
@@ -306,10 +314,10 @@ func newConnLsCmd() *cobra.Command {
 					addrStr = addr(inst)
 					tlsOn = inst.TLS
 				}
-				rows = append(rows, []any{n, addrStr, conn.Username, conn.AuthSource, conn.Database, tlsOn, def})
+				rows = append(rows, []any{n, addrStr, conn.Username, conn.AuthSource, conn.Database, tlsOn, conn.Readonly, def})
 			}
 			return cli.RenderResult(cmd, &output.Result{
-				Columns: []string{"name", "addr", "user", "authSource", "database", "tls", "default"},
+				Columns: []string{"name", "addr", "user", "authSource", "database", "tls", "readonly", "default"},
 				Rows:    rows,
 			}, meta("", start, false))
 		},
@@ -346,6 +354,7 @@ func newConnShowCmd() *cobra.Command {
 				"tls":        inst.TLS,
 				"username":   conn.Username,
 				"authSource": conn.AuthSource,
+				"readonly":   conn.Readonly,
 				"timeout":    conn.Timeout,
 				"default":    name == cfg.DefaultConnection,
 			}

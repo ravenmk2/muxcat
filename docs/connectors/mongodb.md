@@ -2,7 +2,7 @@
 
 MongoDB connector（MongoDB 6 / 7 / 8，优先覆盖 8），基于官方驱动 `go.mongodb.org/mongo-driver/v2`，纯 Go 实现，CI 与 release 的 `CGO_ENABLED=0` 基线不受影响。
 
-Phase 1 只覆盖连接管理（`conn` 命令组）；查询命令在后续阶段落地。
+Phase 2 覆盖连接管理与只读查询（`query` / `aggregate` / `dbs` / `collections`）；写命令在后续阶段落地。
 
 ## 配置模型（mongodb.json）
 
@@ -19,6 +19,7 @@ Phase 1 只覆盖连接管理（`conn` 命令组）；查询命令在后续阶�
       "password": "enc:v1:...",
       "authSource": "admin",
       "database": "shop",
+      "readonly": false,
       "timeout": "5s"
     }
   },
@@ -27,7 +28,7 @@ Phase 1 只覆盖连接管理（`conn` 命令组）；查询命令在后续阶�
 ```
 
 - `instances`：名字 → `{hosts, tls?, replicaSet?}`，纯端点属性。`hosts` 为 `host:port` 数组，phase 1 只支持单条目；条目可省略端口，读取时默认补 27017。`tls: true` 要求 TLS 加密连接（最低 TLS 1.2）。`replicaSet` 保留字段，目前仅在 `--uri` 携带 `replicaSet` 参数时写入。
-- `connections`：名字 → `{instance, username?, password?, authSource?, database?, timeout?}`；`password` 以 `enc:v1:` 加密 blob 落盘、永不在输出中回显；`authSource` 为认证库，设置 username 而未指定 authSource 时默认 `admin`；`database` 为空表示不选默认库；`timeout` 为 Go duration 字符串（如 `5s`），覆盖全局 `--timeout`。
+- `connections`：名字 → `{instance, username?, password?, authSource?, database?, readonly?, timeout?}`；`password` 以 `enc:v1:` 加密 blob 落盘、永不在输出中回显；`authSource` 为认证库，设置 username 而未指定 authSource 时默认 `admin`；`database` 为空表示不选默认库；`readonly` 为只读标记，phase 2 仅存储与展示（ls/show 可见），写命令落地后（phase 3）开始强制；`timeout` 为 Go duration 字符串（如 `5s`），覆盖全局 `--timeout`。
 - `defaultConnection`：缺省连接名；`-c/--conn` 未指定时使用，两者皆无报 `CONN_NOT_FOUND`。
 - `conn add <name>` 同名创建 instance 与 connection（instance 名 = 连接名）；`conn rm` 删除连接时，同名 instance 无其他引用则一并删除。
 
@@ -35,12 +36,39 @@ Phase 1 只覆盖连接管理（`conn` 命令组）；查询命令在后续阶�
 
 | 命令 | 说明 |
 |---|---|
-| `mongodb conn add <name> --host <host> [--port 27017] [--username U] [--password P] [--auth-source DB] [--database DB] [--tls] [--timeout 5s] [--set-default] [--uri mongodb://...]` | 新增连接。非 TTY 缺 `--host`（且无 `--uri`）报 `MISSING_ARGUMENT`；两者皆空且是 TTY 时走 huh 表单补全（其余字段只补全未显式给出的）。`--password` 明文传参会打 stderr 警告后以 `enc:v1:` 加密落盘；`--uri` 内含明文密码同样告警。无默认连接时自动设为默认 |
-| `mongodb conn ls` | 列出连接（name / addr / user / authSource / database / tls / default 标记），不泄露密码 blob |
+| `mongodb conn add <name> --host <host> [--port 27017] [--username U] [--password P] [--auth-source DB] [--database DB] [--tls] [--readonly] [--timeout 5s] [--set-default] [--uri mongodb://...]` | 新增连接。非 TTY 缺 `--host`（且无 `--uri`）报 `MISSING_ARGUMENT`；两者皆空且是 TTY 时走 huh 表单补全（其余字段只补全未显式给出的）。`--password` 明文传参会打 stderr 警告后以 `enc:v1:` 加密落盘；`--uri` 内含明文密码同样告警。无默认连接时自动设为默认 |
+| `mongodb conn ls` | 列出连接（name / addr / user / authSource / database / tls / readonly / default 标记），不泄露密码 blob |
 | `mongodb conn show <name>` | 连接详情（不回显密码；`replicaSet` 仅在设置时展示） |
 | `mongodb conn rm <name> [--yes]` | 删除连接；非 TTY 必须 `--yes`，TTY 弹确认；同名 instance 无其他引用时级联删除，默认连接被删后自动重选 |
 | `mongodb conn default <name>` | 设为默认连接 |
 | `mongodb conn test <name>` | ping + `buildInfo` + `hello`，返回 `{ok, latency_ms, version, topology, maxWireVersion}`；topology 取值 `standalone` / `replicaset` / `sharded` |
+| `mongodb query <collection> [filter] [--db 库] [--projection DOC] [--sort field:asc\|desc] [--skip N] [--file 路径]` | find 查询；filter 为 Extended JSON 文档，可省略（匹配全部）；结果按 `--limit` 截断（`meta.truncated` 标记） |
+| `mongodb aggregate <collection> [pipeline] [--db 库] [--file 路径]` | 只读聚合；pipeline 为 Extended JSON stage 数组（必填）；`$out`/`$merge` 写 stage 一律拒绝（`READONLY_VIOLATION`） |
+| `mongodb dbs` | 列出数据库（name / sizeOnDisk / empty），`--json` 输出原始文档 |
+| `mongodb collections [--db 库]` | 列出当前库的集合（name / type） |
+
+### 查询输入（filter / pipeline）
+
+输入来源优先级（与 mysql query 一致）：
+
+1. 位置参数 `query users '{"age":{"$gte":18}}'`
+2. `--file <路径>` 从文件读取；`--file -` 显式从 stdin 读取
+3. 无参数且无 `--file` 时：stdin 非 TTY（管道/重定向）则读 stdin，TTY 报 `MISSING_ARGUMENT`（aggregate 的 pipeline 必填；query 的 filter 可省略为匹配全部）
+4. 位置参数与 `--file` 同时出现 → `CONFIG_INVALID`
+
+输入一律按 **Extended JSON** 解析（`bson.UnmarshalExtJSON`，relaxed 模式）：`{"_id":{"$oid":"..."}}`、`{"ts":{"$date":"..."}}` 等 BSON 类型写法均可。filter/projection 解析为保序文档（`bson.D`），pipeline 解析为 `bson.A` 且每个 stage 必须是文档；解析失败报 `CONFIG_INVALID`。
+
+目标库由 `resolveDB` 决定：`--db` > 连接的 `database` 字段 > 报 `MISSING_ARGUMENT`（hint 提示传 `--db` 或给连接设置默认库）。
+
+### 文档渲染
+
+- 文本模式：首列 `_id`（仅当所有文档都含 `_id`），随后是顶层字段的并集（按首次出现顺序，封顶 15 列；超出的字段数在 Message 中提示 `+N more fields, use --json`）。标量直接渲染（string / int32 / int64 / float64 / bool / nil→`null` / DateTime→RFC3339 / ObjectID→hex）；其余（子文档、数组、Decimal128、Binary 等）渲染为紧凑 relaxed Extended JSON 字符串；文档缺失的字段显示为空单元格。
+- `--json`：每篇文档经 relaxed Extended JSON 往返转换为标准 JSON（ObjectID 为 `{"$oid":"..."}` 等 Extended JSON 形态），envelope `data` 为文档数组，`meta.truncated` 标记截断。
+- `--limit`（默认 1000，0 = 不限）：query 服务端 `SetLimit(n+1)` 探测截断；aggregate 游标侧多读一篇判断。截断时渲染前 n 篇并置 `meta.truncated: true`。
+
+### aggregate 护栏
+
+aggregate 是只读命令：pipeline 中任何 stage 的顶层 key 为 `$out` 或 `$merge` 时在拨号前拒绝，报 `READONLY_VIOLATION`（退出码 5），hint 说明写 stage 被拒绝。护栏是防误操作措施，不是安全边界。
 
 ### URI 输入说明
 
@@ -63,6 +91,9 @@ Phase 1 只覆盖连接管理（`conn` 命令组）；查询命令在后续阶�
 | `mongo.IsTimeout` / `context.DeadlineExceeded` | `TIMEOUT` |
 | 其余 server selection 错误 | `CONNECT_FAILED` |
 | 其他驱动错误 | `QUERY_ERROR` |
+| aggregate pipeline 含 `$out` / `$merge` stage（拨号前拒绝） | `READONLY_VIOLATION` |
+| filter / pipeline / projection / sort 的 Extended JSON 非法 | `CONFIG_INVALID` |
+| 未指定库（无 `--db` 且连接无默认库） | `MISSING_ARGUMENT` |
 
 ## 示例
 
@@ -74,10 +105,18 @@ muxcat mongodb conn ls
 muxcat mongodb conn show prod --json
 muxcat mongodb conn test prod
 muxcat mongodb conn rm local --yes
+
+muxcat mongodb dbs
+muxcat mongodb collections --db shop
+muxcat mongodb query users '{"age":{"$gte":18}}' --sort age:desc --projection '{"name":1,"age":1}'
+muxcat mongodb query users --file filter.json --json
+echo '{"status":"ok"}' | muxcat mongodb query users --db shop
+muxcat mongodb aggregate orders '[{"$group":{"_id":"$status","n":{"$sum":1}}}]'
+muxcat mongodb aggregate orders '[{"$match":{}},{"$out":"x"}]'   # READONLY_VIOLATION（拨号前拦截）
 ```
 
 ## 已知限制
 
 - 单 host：`hosts` 数组只取一个条目，多 host URI 与 `mongodb+srv://` 均拒绝。
-- 无 readonly 策略（phase 1 无查询路径）。
-- 查询命令在 phase 2 落地，当前仅有 `conn` 命令组。
+- readonly 仅存储与展示，尚无强制行为（写命令落地后生效）。
+- 只有只读查询路径（query / aggregate / dbs / collections）；写命令（insert/update/delete 等）在后续阶段落地。

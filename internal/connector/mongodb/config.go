@@ -34,6 +34,7 @@ type Connection struct {
 	Password   string `json:"password,omitempty"`
 	AuthSource string `json:"authSource,omitempty"`
 	Database   string `json:"database,omitempty"`
+	Readonly   bool   `json:"readonly,omitempty"`
 	Timeout    string `json:"timeout,omitempty"`
 }
 

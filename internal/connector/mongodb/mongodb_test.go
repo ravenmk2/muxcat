@@ -44,6 +44,14 @@ func setupEnv(t *testing.T) {
 	t.Cleanup(func() { masterKey = orig })
 }
 
+// stubStdinTTY replaces the stdin TTY detection for a test.
+func stubStdinTTY(t *testing.T, tty bool) {
+	t.Helper()
+	orig := stdinIsTTY
+	stdinIsTTY = func() bool { return tty }
+	t.Cleanup(func() { stdinIsTTY = orig })
+}
+
 func addConn(t *testing.T, name string, extra ...string) string {
 	t.Helper()
 	args := append([]string{"mongodb", "conn", "add", name, "--host", "127.0.0.1"}, extra...)

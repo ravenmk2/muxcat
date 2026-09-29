@@ -38,16 +38,23 @@ by the official go.mongodb.org/mongo-driver/v2 driver.
 Quickstart:
   1. muxcat mongodb conn add local --host 127.0.0.1 --set-default
   2. muxcat mongodb conn test local
+  3. muxcat mongodb query users '{"age":{"$gte":18}}'
 
 A connection carries credentials (encrypted at rest, never echoed), an
-auth source, and an optional default database. Phase 1 covers connection
-management; query commands land in a later phase.`,
+auth source, and an optional default database. Beyond connection
+management, read-only queries are available: query (find with
+filter/projection/sort), aggregate (pipelines; $out/$merge write stages
+are rejected), dbs and collections.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
 	}
 	c.AddCommand(
 		newConnCmd(),
+		newQueryCmd(),
+		newAggregateCmd(),
+		newDbsCmd(),
+		newCollectionsCmd(),
 	)
 	return c
 }
