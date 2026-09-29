@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ravenmk2/muxcat/schema/elasticsearch.schema.json",
+  "title": "elasticsearch connector config (elasticsearch.json)",
+  "allOf": [
+    { "$ref": "connector-common.schema.json#/$defs/connectorDoc" }
+  ],
+  "properties": {
+    "instances": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/elasticsearchInstance" }
+    },
+    "connections": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/elasticsearchConnection" }
+    }
+  },
+  "$defs": {
+    "elasticsearchInstance": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "url": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "elasticsearchConnection": {
+      "type": "object",
+      "required": ["instance"],
+      "properties": {
+        "instance": { "type": "string", "minLength": 1 },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "apiKey": { "type": "string" },
+        "readonly": { "type": "boolean" },
+        "timeout": { "type": "string" },
+        "insecureSkipVerify": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

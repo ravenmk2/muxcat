@@ -30,7 +30,7 @@ and read the same output.
 | SQLite | ✅ | 3.x |
 | Redis | ✅ | 6+ |
 | MongoDB | 📋 | — |
-| Elasticsearch | 📋 | — |
+| Elasticsearch | 📋 | 7 / 8 / 9 |
 | Nacos | ✅ | 2.x / 3.x |
 | etcd | ✅ | 3.x |
 | RabbitMQ | ✅ | 3.8 ~ 4.x |

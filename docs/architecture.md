@@ -83,6 +83,8 @@ muxcat/
 │   └── connector/
 │       ├── registry.go    # connector 注册表
 │       ├── amqp/          # AMQP connector（0.9.1 + 1.0 双协议，见 docs/connectors/amqp.md）
+│       ├── elasticsearch/ # Elasticsearch connector（见 docs/connectors/elasticsearch.md）
+│       ├── emqx/          # EMQX connector（5.x HTTP API，见 docs/connectors/emqx.md）
 │       ├── etcd/          # etcd connector（见 docs/connectors/etcd.md）
 │       ├── jenkins/       # Jenkins connector（见 docs/connectors/jenkins.md）
 │       ├── mqtt/          # MQTT connector（3.1.1 + 5.0 双协议，见 docs/connectors/mqtt.md）
