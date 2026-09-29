@@ -29,7 +29,7 @@ and read the same output.
 | Postgres | ✅ | 12+ |
 | SQLite | ✅ | 3.x |
 | Redis | ✅ | 6+ |
-| MongoDB | 📋 | — |
+| MongoDB | ✅ | 6.x / 7.x / 8.x |
 | Elasticsearch | ✅ | 7.x / 8.x / 9.x |
 | Nacos | ✅ | 2.x / 3.x |
 | etcd | ✅ | 3.x |
