@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ravenmk2/muxcat/schema/mongodb.schema.json",
+  "title": "mongodb connector config (mongodb.json)",
+  "allOf": [
+    { "$ref": "connector-common.schema.json#/$defs/connectorDoc" }
+  ],
+  "properties": {
+    "instances": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/mongodbInstance" }
+    },
+    "connections": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/mongodbConnection" }
+    }
+  },
+  "$defs": {
+    "mongodbInstance": {
+      "type": "object",
+      "required": ["hosts"],
+      "properties": {
+        "hosts": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1
+        },
+        "tls": { "type": "boolean" },
+        "replicaSet": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "mongodbConnection": {
+      "type": "object",
+      "required": ["instance"],
+      "properties": {
+        "instance": { "type": "string", "minLength": 1 },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "authSource": { "type": "string" },
+        "database": { "type": "string" },
+        "timeout": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

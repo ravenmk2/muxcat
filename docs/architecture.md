@@ -87,6 +87,7 @@ muxcat/
 │       ├── emqx/          # EMQX connector（5.x HTTP API，见 docs/connectors/emqx.md）
 │       ├── etcd/          # etcd connector（见 docs/connectors/etcd.md）
 │       ├── jenkins/       # Jenkins connector（见 docs/connectors/jenkins.md）
+│       ├── mongodb/       # MongoDB connector（见 docs/connectors/mongodb.md）
 │       ├── mqtt/          # MQTT connector（3.1.1 + 5.0 双协议，见 docs/connectors/mqtt.md）
 │       ├── mysql/         # MySQL connector（见 docs/connectors/mysql.md）
 │       ├── nacos/         # Nacos connector（见 docs/connectors/nacos.md）
