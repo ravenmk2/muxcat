@@ -8,6 +8,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"strings"
 	"time"
 
@@ -31,20 +32,22 @@ mattn/go-sqlite3, pure-Go builds use modernc.org/sqlite; the
 switch is automatic.
 
 Quickstart:
-  1. muxcat sqlite conn add local --path ./app.db --set-default
+  1. muxcat sqlite conn add local --path ./app.db --ensure-db --set-default
   2. muxcat sqlite tables
   3. muxcat sqlite query "SELECT * FROM users LIMIT 5"
 
 A connection points at a database file (the path supports ~
 expansion) and carries usage policies: a readonly connection
-opens the file with mode=ro, so SQLite itself rejects writes.
-Every invocation opens the file fresh; statements are
-single-shot (no multi-statement scripts, no transactions).`,
+opens the file with mode=ro, so SQLite itself rejects writes;
+without --ensure-db a missing file is an error instead of a
+silently created empty database. Every invocation opens the
+file fresh; statements are single-shot (no multi-statement
+scripts, no transactions).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
 	}
-	c.AddCommand(newConnCmd(), newQueryCmd(), newTablesCmd(), newSchemaCmd())
+	c.AddCommand(newConnCmd(), newQueryCmd(), newTablesCmd(), newSchemaCmd(), newStatusCmd(), newDescribeCmd())
 	return c
 }
 
@@ -60,10 +63,20 @@ func meta(connName string, start time.Time, truncated bool) output.Meta {
 
 // openDB opens a connection and verifies it with Ping; failures are
 // classified as CONNECT_FAILED (e.g. opening a nonexistent file read-only).
+// On writable connections a missing file is rejected unless the instance
+// opted into ensureDb, so a typoed path never silently creates an empty
+// database.
 func openDB(ctx context.Context, cfg *Config, conn Connection) (*sql.DB, string, error) {
 	path, err := cfg.instancePath(conn)
 	if err != nil {
 		return nil, "", err
+	}
+	if !conn.Readonly && path != ":memory:" && !cfg.Instances[conn.Instance].EnsureDb {
+		if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
+			return nil, "", output.NewError(output.CodeConnectFailed,
+				"database file does not exist: "+path,
+				"create the file first, or re-add the connection with --ensure-db")
+		}
 	}
 	db, err := sql.Open(driverName, dsn(path, conn.Readonly))
 	if err != nil {

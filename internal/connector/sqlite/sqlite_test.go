@@ -32,9 +32,11 @@ func setupEnv(t *testing.T) string {
 	return filepath.Join(t.TempDir(), "test.db")
 }
 
+// addConn registers a connection whose database file does not exist yet;
+// --ensure-db keeps the implicit-creation guard out of the way of tests.
 func addConn(t *testing.T, name, dbPath string, extra ...string) {
 	t.Helper()
-	args := append([]string{"sqlite", "conn", "add", name, "--path", dbPath}, extra...)
+	args := append([]string{"sqlite", "conn", "add", name, "--path", dbPath, "--ensure-db"}, extra...)
 	if out, err := runMuxcat(t, args...); err != nil {
 		t.Fatalf("conn add %s failed: %v\n%s", name, err, out)
 	}
@@ -338,5 +340,249 @@ func TestNullAndBlobRendering(t *testing.T) {
 	}
 	if env.Data.Rows[1][1] != "" {
 		t.Fatalf("empty string must stay \"\" in JSON, got %v", env.Data.Rows[1][1])
+	}
+}
+
+func TestFirstKeyword(t *testing.T) {
+	cases := map[string]string{
+		"SELECT 1":              "SELECT",
+		"  select 1":            "SELECT",
+		"-- comment\nUPDATE t":  "UPDATE",
+		"/* c */ DELETE FROM t": "DELETE",
+		"(SELECT 1)":            "SELECT",
+		"-- eof":                "",
+		"/* unterminated":       "",
+		"":                      "",
+	}
+	for in, want := range cases {
+		if got := firstKeyword(in); got != want {
+			t.Errorf("firstKeyword(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestIsQuery(t *testing.T) {
+	cases := map[string]bool{
+		"SELECT 1":                             true,
+		"-- c\nSELECT 1":                       true,
+		"(VALUES(1))":                          true,
+		"PRAGMA table_info(t)":                 true,
+		"INSERT INTO t VALUES(1) RETURNING id": true,
+		"update t set x = 1 returning x":       true,
+		"DELETE FROM t RETURNING id":           true,
+		"INSERT INTO t VALUES(1)":              false,
+		"CREATE TABLE t(id INTEGER)":           false,
+		// Documented limitation: the word "returning" inside a string
+		// literal trips the heuristic and routes to the query path.
+		"INSERT INTO t(name) VALUES('returning')": true,
+		"": false,
+	}
+	for in, want := range cases {
+		if got := isQuery(in); got != want {
+			t.Errorf("isQuery(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestInsertReturningRoundTrip(t *testing.T) {
+	dbPath := setupEnv(t)
+	addConn(t, "local", dbPath, "--set-default")
+	queryOK(t, "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT)")
+
+	out := queryOK(t, "INSERT INTO t(name) VALUES('a') RETURNING id", "--json")
+	var env struct {
+		Data struct {
+			RowCount int     `json:"row_count"`
+			Rows     [][]any `json:"rows"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("invalid envelope: %v\n%s", err, out)
+	}
+	if env.Data.RowCount != 1 {
+		t.Fatalf("RETURNING row_count = %d, want 1", env.Data.RowCount)
+	}
+
+	// Documented limitation: 'returning' in a string literal routes to the
+	// query path; the statement still executes and reports zero rows.
+	out = queryOK(t, "INSERT INTO t(name) VALUES('returning')", "--json")
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("invalid envelope: %v\n%s", err, out)
+	}
+	if env.Data.RowCount != 0 {
+		t.Fatalf("literal false positive row_count = %d, want 0", env.Data.RowCount)
+	}
+	if got := queryOK(t, "SELECT count(*) FROM t"); !strings.Contains(got, "2") {
+		t.Fatalf("both inserts should have executed: %q", got)
+	}
+}
+
+func TestReadonlyGuard(t *testing.T) {
+	dbPath := setupEnv(t)
+	addConn(t, "rw", dbPath, "--set-default")
+	queryOK(t, "CREATE TABLE t(id INTEGER PRIMARY KEY)")
+	addConn(t, "ro", dbPath, "--readonly")
+
+	// The client-side guard intercepts writes before the file is opened,
+	// including writes hidden behind comments or parentheses.
+	for _, sqlText := range []string{
+		"UPDATE t SET id = 2",
+		"(UPDATE t SET id = 3)",
+	} {
+		_, err := runMuxcat(t, "sqlite", "query", sqlText, "-c", "ro")
+		if err == nil || output.ToError(err).Code != output.CodeReadonlyViolation {
+			t.Fatalf("readonly guard %q: err=%v", sqlText, err)
+		}
+	}
+	// A leading -- comment needs the flag/arg separator to reach RunE.
+	_, err := runMuxcat(t, "sqlite", "query", "-c", "ro", "--", "-- sneaky\nDROP TABLE t")
+	if err == nil || output.ToError(err).Code != output.CodeReadonlyViolation {
+		t.Fatalf("readonly guard behind comment: err=%v", err)
+	}
+}
+
+func TestDSNEscaping(t *testing.T) {
+	d := dsn("we/ird?na#me%.db", false)
+	if !strings.Contains(d, "file:we/ird%3Fna%23me%25.db?") {
+		t.Fatalf("special characters not escaped: %s", d)
+	}
+}
+
+func TestConnRmReselectsDefaultDeterministically(t *testing.T) {
+	dbPath := setupEnv(t)
+	addConn(t, "m", dbPath)
+	addConn(t, "a", dbPath)
+	addConn(t, "z", dbPath)
+
+	if _, err := runMuxcat(t, "sqlite", "conn", "rm", "m", "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DefaultConnection != "a" {
+		t.Fatalf("defaultConnection = %q, want a (sorted first of the rest)", cfg.DefaultConnection)
+	}
+}
+
+func TestConnAddTimeout(t *testing.T) {
+	dbPath := setupEnv(t)
+	addConn(t, "local", dbPath, "--timeout", "3s")
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Connections["local"].Timeout != "3s" {
+		t.Fatalf("timeout = %q, want 3s", cfg.Connections["local"].Timeout)
+	}
+
+	_, err = runMuxcat(t, "sqlite", "conn", "add", "bad", "--path", dbPath,
+		"--ensure-db", "--timeout", "abc")
+	if err == nil || output.ToError(err).Code != output.CodeConfigInvalid {
+		t.Fatalf("invalid --timeout: err=%v", err)
+	}
+}
+
+func TestConnAddEnsureDb(t *testing.T) {
+	dbPath := setupEnv(t)
+
+	// Missing file without --ensure-db is rejected at add time.
+	_, err := runMuxcat(t, "sqlite", "conn", "add", "local", "--path", dbPath)
+	if err == nil || output.ToError(err).Code != output.CodeConfigInvalid {
+		t.Fatalf("add without --ensure-db on missing file: err=%v", err)
+	}
+
+	// With --ensure-db the connection is stored and the file is created on
+	// first use.
+	addConn(t, "local", dbPath)
+	queryOK(t, "CREATE TABLE t(id INTEGER PRIMARY KEY)")
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatalf("database file should exist after first use: %v", err)
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Instances["local"].EnsureDb {
+		t.Fatal("instance should carry ensureDb")
+	}
+
+	// An existing file without ensureDb opens fine, but once the file is
+	// gone the open-time guard rejects the silent recreation.
+	dbPath2 := filepath.Join(t.TempDir(), "gone.db")
+	if err := os.WriteFile(dbPath2, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runMuxcat(t, "sqlite", "conn", "add", "strict", "--path", dbPath2); err != nil {
+		t.Fatalf("add on existing file without --ensure-db should succeed: %v", err)
+	}
+	if err := os.Remove(dbPath2); err != nil {
+		t.Fatal(err)
+	}
+	_, err = runMuxcat(t, "sqlite", "query", "SELECT 1", "-c", "strict")
+	if err == nil || output.ToError(err).Code != output.CodeConnectFailed {
+		t.Fatalf("query on missing file without ensureDb: err=%v", err)
+	}
+}
+
+func TestStatus(t *testing.T) {
+	dbPath := setupEnv(t)
+	addConn(t, "local", dbPath, "--set-default")
+	queryOK(t, "CREATE TABLE t(id INTEGER PRIMARY KEY)")
+
+	out := queryOK(t, "SELECT 1") // ensure the file exists
+	_ = out
+	out, err := runMuxcat(t, "sqlite", "status", "--json")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	var env struct {
+		Data struct {
+			Metrics map[string]any `json:"metrics"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("invalid envelope: %v\n%s", err, out)
+	}
+	m := env.Data.Metrics
+	if m["version"] == "" || m["journal_mode"] == "" {
+		t.Fatalf("metrics missing version/journal_mode: %v", m)
+	}
+	if ps, ok := m["page_size"].(float64); !ok || ps <= 0 {
+		t.Fatalf("page_size = %v", m["page_size"])
+	}
+	if _, ok := m["file_size_bytes"]; !ok {
+		t.Fatalf("file-backed db should report file_size_bytes: %v", m)
+	}
+	if _, ok := m["wal"]; !ok {
+		t.Fatalf("file-backed db should report wal: %v", m)
+	}
+}
+
+func TestDescribe(t *testing.T) {
+	dbPath := setupEnv(t)
+	addConn(t, "local", dbPath, "--set-default")
+	queryOK(t, "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT 'x')")
+
+	out, err := runMuxcat(t, "sqlite", "describe", "t")
+	if err != nil {
+		t.Fatalf("describe: %v\n%s", err, out)
+	}
+	for _, want := range []string{"id", "name", "TEXT", "INTEGER"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("describe output missing %q: %q", want, out)
+		}
+	}
+
+	// views are describable too
+	queryOK(t, "CREATE VIEW v AS SELECT name FROM t")
+	if out, err := runMuxcat(t, "sqlite", "describe", "v"); err != nil || !strings.Contains(out, "name") {
+		t.Fatalf("describe view: err=%v out=%q", err, out)
+	}
+
+	if _, err := runMuxcat(t, "sqlite", "describe", "nope"); err == nil ||
+		output.ToError(err).Code != output.CodeQueryError {
+		t.Fatalf("describe nope: err=%v", err)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -43,8 +44,8 @@ func newConnAddCmd() *cobra.Command {
 		Use:   "add <name>",
 		Short: "Add a connection (creates an instance of the same name)",
 		Args:  cli.ExactArgs(1, "<name>", "name"),
-		Example: `  muxcat sqlite conn add local --path ./app.db --set-default
-  muxcat sqlite conn add shared --path ~/data/team.db
+		Example: `  muxcat sqlite conn add local --path ./app.db --ensure-db --set-default
+  muxcat sqlite conn add shared --path ~/data/team.db --timeout 10s
   muxcat sqlite conn add ro --path ./app.db --readonly`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			start := time.Now()
@@ -77,8 +78,24 @@ func newConnAddCmd() *cobra.Command {
 			}
 			path = ExpandHome(strings.TrimSpace(path))
 
-			cfg.Instances[name] = Instance{Path: path}
-			cfg.Connections[name] = Connection{Instance: name, Readonly: readonly}
+			timeout := cli.FlagString(cmd, "timeout")
+			if timeout != "" {
+				if d, err := time.ParseDuration(timeout); err != nil || d <= 0 {
+					return output.NewError(output.CodeConfigInvalid,
+						"invalid --timeout value: "+timeout, "examples: 5s, 1m (must be > 0)")
+				}
+			}
+			ensureDb := cli.FlagBool(cmd, "ensure-db")
+			if path != ":memory:" && !ensureDb {
+				if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+					return output.NewError(output.CodeConfigInvalid,
+						"database file does not exist: "+path,
+						"pass --ensure-db to create it on first use")
+				}
+			}
+
+			cfg.Instances[name] = Instance{Path: path, EnsureDb: ensureDb}
+			cfg.Connections[name] = Connection{Instance: name, Readonly: readonly, Timeout: timeout}
 			if cli.FlagBool(cmd, "set-default") || cfg.DefaultConnection == "" {
 				cfg.DefaultConnection = name
 			}
@@ -92,6 +109,8 @@ func newConnAddCmd() *cobra.Command {
 	}
 	c.Flags().String("path", "", "database file path (supports ~ expansion)")
 	c.Flags().Bool("readonly", false, "open read-only (mode=ro)")
+	c.Flags().String("timeout", "", "command timeout for this connection, overrides the global --timeout (e.g. 5s)")
+	c.Flags().Bool("ensure-db", false, "create the database file on first use if it does not exist")
 	c.Flags().Bool("set-default", false, "set as the default connection")
 	return c
 }
@@ -141,7 +160,10 @@ func newConnLsCmd() *cobra.Command {
 				if n == cfg.DefaultConnection {
 					def = "*"
 				}
-				path, _ := cfg.instancePath(conn)
+				path, err := cfg.instancePath(conn)
+				if err != nil {
+					path = "<broken instance: " + conn.Instance + ">"
+				}
 				rows = append(rows, []any{n, path, conn.Readonly, def})
 			}
 			return cli.RenderResult(cmd, &output.Result{
@@ -180,6 +202,7 @@ func newConnShowCmd() *cobra.Command {
 				"path":     path,
 				"readonly": conn.Readonly,
 				"timeout":  conn.Timeout,
+				"ensureDb": cfg.Instances[conn.Instance].EnsureDb,
 				"default":  name == cfg.DefaultConnection,
 			}}, meta(name, start, false))
 		},
@@ -235,9 +258,13 @@ func newConnRmCmd() *cobra.Command {
 			}
 			if cfg.DefaultConnection == name {
 				cfg.DefaultConnection = ""
+				rest := make([]string, 0, len(cfg.Connections))
 				for n := range cfg.Connections {
-					cfg.DefaultConnection = n
-					break
+					rest = append(rest, n)
+				}
+				sort.Strings(rest)
+				if len(rest) > 0 {
+					cfg.DefaultConnection = rest[0]
 				}
 			}
 			if err := saveConfig(cfg); err != nil {

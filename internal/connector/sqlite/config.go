@@ -17,6 +17,9 @@ const FileName = "sqlite.json"
 // Instance is a sqlite endpoint: a database file path.
 type Instance struct {
 	Path string `json:"path"`
+	// EnsureDb allows creating the database file on first use when it does
+	// not exist; without it, opening a missing file is an error.
+	EnsureDb bool `json:"ensureDb,omitempty"`
 }
 
 // Connection is a session config pointing at an instance. sqlite has no
@@ -130,13 +133,17 @@ func ExpandHome(p string) string {
 	return p
 }
 
+// dsnEscaper escapes the characters that would otherwise corrupt the
+// file: URI query string when a path contains them.
+var dsnEscaper = strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23")
+
 // dsn builds a DSN from the _pragma= common subset supported by both
 // drivers; readonly connections get mode=ro.
 func dsn(path string, readonly bool) string {
 	if path == ":memory:" {
 		return ":memory:"
 	}
-	d := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	d := "file:" + dsnEscaper.Replace(path) + "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
 	if readonly {
 		d += "&mode=ro"
 	}

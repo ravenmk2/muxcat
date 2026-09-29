@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,12 +22,22 @@ var queryVerbs = map[string]bool{
 	"EXPLAIN": true, "VALUES": true, "TABLE": true,
 }
 
+// returningRe detects INSERT/UPDATE/DELETE ... RETURNING, which produces a
+// result set despite being a write statement. Known limitation: a string
+// literal containing the word "returning" trips the heuristic (the only
+// effect is the query path reporting rows_affected as 0).
+var returningRe = regexp.MustCompile(`(?i)\bRETURNING\b`)
+
 func isQuery(sqlText string) bool {
-	fields := strings.Fields(strings.TrimSpace(sqlText))
-	if len(fields) == 0 {
-		return false
+	kw := firstKeyword(sqlText)
+	if queryVerbs[kw] {
+		return true
 	}
-	return queryVerbs[strings.ToUpper(fields[0])]
+	switch kw {
+	case "INSERT", "UPDATE", "DELETE":
+		return returningRe.MatchString(sqlText)
+	}
+	return false
 }
 
 // resolveTarget loads the config and resolves a connection from
@@ -54,13 +65,16 @@ func newQueryCmd() *cobra.Command {
 		Use:   `query "SQL"`,
 		Short: "Execute SQL (SELECT-like statements return a result set, others report rows_affected)",
 		Long: `Execute one SQL statement. A statement leading with
-SELECT/PRAGMA/WITH/EXPLAIN/VALUES/TABLE returns a result set;
-anything else runs via Exec and reports rows_affected (known
-limitation: INSERT ... RETURNING takes the Exec path).
+SELECT/PRAGMA/WITH/EXPLAIN/VALUES/TABLE returns a result set, as
+does INSERT/UPDATE/DELETE ... RETURNING; anything else runs via
+Exec and reports rows_affected. Leading comments and parentheses
+are skipped when routing (known limitation: a string literal
+containing the word "returning" trips the RETURNING heuristic).
 
 Result sets are capped by --limit (meta.truncated reports an
 early stop; --limit 0 disables the cap). NULL renders as NULL,
 BLOB columns as 0x hex. On a readonly connection (mode=ro)
+write statements are intercepted client-side and any remaining
 writes are rejected by SQLite as READONLY_VIOLATION.`,
 		Args: cli.ExactArgs(1, `"SQL"`, "sql"),
 		Example: `  muxcat sqlite query "SELECT id, email FROM users LIMIT 5"
@@ -71,6 +85,9 @@ writes are rejected by SQLite as READONLY_VIOLATION.`,
 			start := time.Now()
 			cfg, name, conn, err := resolveTarget(cmd)
 			if err != nil {
+				return err
+			}
+			if err := guardQuery(conn, args[0]); err != nil {
 				return err
 			}
 			timeout, err := queryTimeout(conn, cli.FlagTimeout(cmd))
