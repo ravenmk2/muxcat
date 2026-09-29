@@ -26,7 +26,7 @@ node list with roles and resource usage from the _cat API.`,
 }
 
 // clusterHealthFields are the well-known stable fields of
-// GET /_cluster/health, present on ES 7/8/9.
+// GET /_cluster/health, present on ES 7.x/8.x/9.x.
 var clusterHealthFields = []string{
 	"status", "cluster_name", "timed_out",
 	"number_of_nodes", "number_of_data_nodes",

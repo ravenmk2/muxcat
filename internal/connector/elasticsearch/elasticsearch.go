@@ -24,7 +24,7 @@ func New() *cobra.Command {
 		Aliases: []string{"es"},
 		Short:   "Elasticsearch connector",
 		Long: `Elasticsearch connector over the REST API, a plain net/http client
-with no external driver. Supports Elasticsearch 7/8/9.
+with no external driver. Supports Elasticsearch 7.x/8.x/9.x.
 
 Quickstart:
   1. muxcat elasticsearch conn add local --url https://es.example.com:9200 --username elastic --password s3cret --set-default

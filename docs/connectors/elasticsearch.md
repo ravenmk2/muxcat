@@ -1,6 +1,6 @@
 # elasticsearch connector
 
-Elasticsearch connector 通过 Elasticsearch REST API 接入，实现为纯 `net/http` 客户端，无外部驱动依赖（符合 `CGO_ENABLED=0` 基线）。命令名 `elasticsearch`，别名 `es`。**支持 Elasticsearch 7/8/9**。覆盖：连接管理（conn 组）、搜索（search）、索引/文档/集群只读检查（index、doc、cluster 组）与原生请求透传（request）。写入/管理类操作（索引创建、文档写入等）不在本期范围——经 `request` 透传。
+Elasticsearch connector 通过 Elasticsearch REST API 接入，实现为纯 `net/http` 客户端，无外部驱动依赖（符合 `CGO_ENABLED=0` 基线）。命令名 `elasticsearch`，别名 `es`。**支持 Elasticsearch 7.x/8.x/9.x**。覆盖：连接管理（conn 组）、搜索（search）、索引/文档/集群只读检查（index、doc、cluster 组）与原生请求透传（request）。写入/管理类操作（索引创建、文档写入等）不在本期范围——经 `request` 透传。
 
 ## 配置模型（elasticsearch.json）
 
@@ -36,7 +36,7 @@ Elasticsearch connector 通过 Elasticsearch REST API 接入，实现为纯 `net
 
 ## 版本兼容性
 
-- **默认媒体类型即跨版本可用**：`request` 默认发送/接受普通 `application/json`，Elasticsearch 7/8/9 均接受，无需客户端版本适配层。
+- **默认媒体类型即跨版本可用**：`request` 默认发送/接受普通 `application/json`，Elasticsearch 7.x/8.x/9.x 均接受，无需客户端版本适配层。
 - **`--compat <7|8>`**：发送版本化媒体类型 `application/vnd.elasticsearch+json;compatible-with=N`（Accept 恒带；有 body 时 Content-Type 同步）。兼容头仅跨一个大版本有效：8.x 接受 `compatible-with=7|8`，9.x 仅接受 `=8`。客户端不校验 compat 值与服务端版本的匹配关系，不匹配时服务端返回 406，按 raw 语义原样呈现为 data。
 - **版本探测**：`conn test` 通过 `GET /` 的 `version.number` 与 `cluster_name` 读取服务端版本与集群名。
 - **X-Elastic-Product**：Elasticsearch 7.14+ 的所有响应携带 `X-Elastic-Product: Elasticsearch` 头；缺失（如 OpenSearch 分支或更老版本）时 `conn test` 不失败，降级为在结果中附 warning 字段。
@@ -93,7 +93,7 @@ Elasticsearch connector 通过 Elasticsearch REST API 接入，实现为纯 `net
 
 ## 已知限制
 
-- 无客户端版本适配层：本期覆盖的 API（_search、_cat、_cluster/health、GET /<index>、_doc）在 ES 7/8/9 字节级一致；其余写入/管理类操作经 `request` 透传，请求体语义由用户按服务端版本把握。
+- 无客户端版本适配层：本期覆盖的 API（_search、_cat、_cluster/health、GET /<index>、_doc）在 ES 7.x/8.x/9.x 字节级一致；其余写入/管理类操作经 `request` 透传，请求体语义由用户按服务端版本把握。
 - `search` 文本表格的 `_source` 列上限 15 列（取键名排序并集），宽文档用 `--json` 取原始响应；`--file` 模式的分页/排序由 DSL body 自带，`--size/--from/--sort` 不与其组合。
 - `--compat` 不在客户端与服务端版本对账；不兼容时依赖服务端 406 按 raw 语义呈现。
 - 单次响应体上限 64MB；错误消息中的 body 截断 512 字符。
