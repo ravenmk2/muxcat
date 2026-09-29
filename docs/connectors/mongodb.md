@@ -2,7 +2,7 @@
 
 MongoDB connector（MongoDB 6 / 7 / 8，优先覆盖 8），基于官方驱动 `go.mongodb.org/mongo-driver/v2`，纯 Go 实现，CI 与 release 的 `CGO_ENABLED=0` 基线不受影响。
 
-Phase 3 覆盖连接管理、只读查询（`query` / `aggregate` / `dbs` / `collections`）与写入（`insert` / `update` / `delete` / `drop`），readonly 连接标记开始强制生效。
+当前已覆盖全部规划能力：连接管理、只读查询（`query` / `aggregate` / `dbs` / `collections`）、写入（`insert` / `update` / `delete` / `drop`，readonly 强制）、运维（`indexes` / `stats` / `status` / `users` / `roles`）。
 
 ## 配置模型（mongodb.json）
 
@@ -50,6 +50,32 @@ Phase 3 覆盖连接管理、只读查询（`query` / `aggregate` / `dbs` / `col
 | `mongodb update <collection> <filter> <update> [--db 库] [--many] [--upsert]` | 更新文档：默认 UpdateOne，`--many` 换 UpdateMany（mongosh 语义），`--upsert` 无匹配时插入。update 为操作符文档（`{"$set":...}`）或替换文档，空文档报 `CONFIG_INVALID` |
 | `mongodb delete <collection> [filter] [--db 库] [--many] [--file 路径] [--yes]` | 删除文档：默认 DeleteOne，`--many` 换 DeleteMany。空 filter + `--many`（清空集合）需要确认 |
 | `mongodb drop <collection> [--db 库] [--yes]` | 删除集合（不可逆，一律确认）；集合不存在报 `QUERY_ERROR` |
+| `mongodb indexes ls <collection> [--db 库]` | 列出索引（name / keys / unique / sparse / ttl），keys 为紧凑 Extended JSON；`--json` 输出原始索引 spec |
+| `mongodb indexes create <collection> <keys> [--db 库] [--name N] [--unique] [--sparse] [--ttl 秒]` | 创建索引；keys 为非空 Extended JSON 文档（`{"email":1}` / `{"loc":"2dsphere"}`），非法或空报 `CONFIG_INVALID`；`--ttl` 负数报 `CONFIG_INVALID` |
+| `mongodb indexes drop <collection> <name> [--db 库] [--yes]` | 按名删除索引（需确认）；索引不存在报 `QUERY_ERROR` |
+| `mongodb stats [collection] [--db 库]` | dbStats / collStats 精选字段（缺省字段按版本差异省略）；`--json` 输出完整响应 |
+| `mongodb status` | serverStatus 精选摘要（host/version/uptime/connections/mem/opcounters/wiredTiger cache）；`--json` 输出完整响应 |
+| `mongodb users [--db 库]` | 列出用户（user / db / roles，roles 渲染为 `role@db` 逗号分隔） |
+| `mongodb roles [--db 库]` | 列出角色（role / db / inheritedRoles / privileges，后两列为计数）；`--json` 含完整 privileges |
+
+### 索引管理
+
+`indexes` 命令组：`ls` 走 ListIndexes 游标（unique/sparse 缺省视为 false，ttl 取 `expireAfterSeconds` 秒数、缺省为空）；`create` 的 keys 必须是保序文档（`bson.D`），经 `options.Index().SetName/SetUnique/SetSparse/SetExpireAfterSeconds` 传给 CreateOne；`drop` 按名删除（DropOne），服务端 IndexNotFound（错误码 27）归为 `QUERY_ERROR`，删 `_id_` 由服务端自然报错。create/drop 是写操作，readonly 连接拨号前拒绝。
+
+### 统计与状态
+
+- `stats`：无参 `dbStats`、带集合名 `collStats`；文本输出精选字段（dbStats：db/collections/objects/avgObjSize/dataSize/storageSize/indexes/indexSize；collStats：ns/count/size/avgObjSize/storageSize/totalIndexSize/nindexes），响应中缺失的字段省略（兼容 6/7/8 差异）。
+- `status`：admin 库 `serverStatus`；摘要为点路径扁平 key——host/version/process/pid/uptime（秒）、connections.{current,available,active}、mem.{resident,virtual}（MB）、opcounters.{insert,query,update,delete,getmore,command}，以及 `wiredTiger.cache.currentBytes` / `wiredTiger.cache.maxBytes`（引擎非 WiredTiger 时省略）。
+
+### 用户与角色
+
+- `users`：对解析出的库执行 `usersInfo:1`；`roles`：执行 `rolesInfo:1` + `showPrivileges:true`。
+- 安全说明：`usersInfo` / `rolesInfo` 的响应本身不含凭据字段（口令散列只存于 `admin.system.users` 且不随这两个命令返回）；本 connector 的输出路径也只渲染身份与授权字段。
+
+### readonly 强制（补充）
+
+readonly 拦截同样覆盖 `indexes create` / `indexes drop`；`indexes ls` / `stats` / `status` / `users` / `roles` 为只读命令，不受影响。
+
 
 ### 写命令
 
@@ -107,12 +133,13 @@ aggregate 是只读命令：pipeline 中任何 stage 的顶层 key 为 `$out` �
 | 其余 server selection 错误 | `CONNECT_FAILED` |
 | 其他驱动错误 | `QUERY_ERROR` |
 | aggregate pipeline 含 `$out` / `$merge` stage（拨号前拒绝） | `READONLY_VIOLATION` |
-| readonly 连接执行 insert / update / delete / drop（拨号前拒绝） | `READONLY_VIOLATION` |
+| readonly 连接执行 insert / update / delete / drop / indexes create / indexes drop（拨号前拒绝） | `READONLY_VIOLATION` |
 | filter / pipeline / projection / sort / 插入文档的 Extended JSON 非法 | `CONFIG_INVALID` |
 | 未指定库（无 `--db` 且连接无默认库） | `MISSING_ARGUMENT` |
-| 清空集合 / drop 未经确认（非 TTY 缺 `--yes`） | `MISSING_ARGUMENT` |
+| 清空集合 / drop / indexes drop 未经确认（非 TTY 缺 `--yes`） | `MISSING_ARGUMENT` |
 | CommandError 11000（duplicate key） | `QUERY_ERROR` |
 | drop 不存在的集合（响应无 `ns` 字段或服务端返回 NamespaceNotFound/26） | `QUERY_ERROR` |
+| indexes drop 不存在的索引（IndexNotFound，错误码 27） | `QUERY_ERROR` |
 
 ## 示例
 
@@ -141,9 +168,20 @@ muxcat mongodb update users '{"status":"pending"}' '{"$set":{"status":"done"}}' 
 muxcat mongodb delete users '{"status":"expired"}' --many
 muxcat mongodb delete sessions --many --yes                     # 清空集合（需确认）
 muxcat mongodb drop staging --yes                               # 删除集合（需确认）
+
+muxcat mongodb indexes ls users
+muxcat mongodb indexes create users '{"email":1}' --unique
+muxcat mongodb indexes create sessions '{"createdAt":1}' --ttl 3600
+muxcat mongodb indexes drop users email_1 --yes
+muxcat mongodb stats
+muxcat mongodb stats users --db shop
+muxcat mongodb status --json
+muxcat mongodb users --db shop
+muxcat mongodb roles
 ```
 
 ## 已知限制
 
 - 单 host：`hosts` 数组只取一个条目，多 host URI 与 `mongodb+srv://` 均拒绝。
-- 无 create-collection 命令（insert 隐式创建集合）；索引管理在后续阶段落地。
+- 无 create-collection 命令（insert 隐式创建集合）。
+- 副本集/分片运维命令（rs-status 等）与 explain 暂未实现，留待后续。

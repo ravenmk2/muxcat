@@ -63,7 +63,7 @@ muxcat/
 | Postgres | ✅ |
 | Redis | ✅ |
 | etcd | ✅ |
-| MongoDB | ✅（phase 1-3：连接管理 + 查询 + 写入） |
+| MongoDB | ✅ |
 | ElasticSearch | ✅ |
 | OpenObserve | ✅ |
 | RabbitMQ | ✅ |

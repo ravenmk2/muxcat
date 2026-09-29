@@ -44,7 +44,8 @@ A connection carries credentials (encrypted at rest, never echoed), an
 auth source, and an optional default database. Read-only queries: query
 (find with filter/projection/sort), aggregate (pipelines; $out/$merge
 write stages are rejected), dbs and collections. Write commands
-(insert/update/delete/drop) refuse to run on readonly connections.`,
+(insert/update/delete/drop) refuse to run on readonly connections. Ops
+commands: indexes (ls/create/drop), stats, status, users and roles.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -59,6 +60,11 @@ write stages are rejected), dbs and collections. Write commands
 		newUpdateCmd(),
 		newDeleteCmd(),
 		newDropCmd(),
+		newIndexesCmd(),
+		newStatsCmd(),
+		newStatusCmd(),
+		newUsersCmd(),
+		newRolesCmd(),
 	)
 	return c
 }

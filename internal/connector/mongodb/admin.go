@@ -127,3 +127,171 @@ func newCollectionsCmd() *cobra.Command {
 	c.Flags().String("db", "", "override the connection's database for this invocation")
 	return c
 }
+
+func newStatsCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "stats [collection]",
+		Short: "Show database or collection statistics (dbStats / collStats)",
+		Args:  cobra.MaximumNArgs(1),
+		Example: `  muxcat mongodb stats
+  muxcat mongodb stats users
+  muxcat mongodb stats users --db shop --json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			start := time.Now()
+			cfg, name, conn, err := resolveTarget(cmd)
+			if err != nil {
+				return err
+			}
+			dbName, err := resolveDB(cmd, conn)
+			if err != nil {
+				return err
+			}
+			timeout, err := queryTimeout(conn, cli.FlagTimeout(cmd))
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+			defer cancel()
+			client, err := connect(ctx, cfg, conn)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = client.Disconnect(context.Background()) }()
+
+			command := bson.D{{Key: "dbStats", Value: 1}}
+			if len(args) == 1 {
+				command = bson.D{{Key: "collStats", Value: args[0]}}
+			}
+			var res bson.D
+			if err := client.Database(dbName).RunCommand(ctx, command).Decode(&res); err != nil {
+				return classifyErr(err, "stats failed")
+			}
+			jsonData, err := relaxedJSON(res)
+			if err != nil {
+				return output.NewError(output.CodeGeneral, "failed to encode the stats: "+err.Error(), "")
+			}
+			return cli.RenderResult(cmd, &output.Result{
+				Value:    statsValue(res),
+				JSONData: jsonData,
+			}, meta(name, start, false))
+		},
+	}
+	c.Flags().String("db", "", "override the connection's database for this invocation")
+	return c
+}
+
+// statsValue picks the summary fields of a dbStats/collStats response;
+// fields absent from the response (version differences) are omitted.
+func statsValue(doc bson.D) map[string]any {
+	v := map[string]any{}
+	for _, k := range []string{
+		"db", "ns", "collections", "objects", "count", "size",
+		"avgObjSize", "dataSize", "storageSize", "totalIndexSize",
+		"indexes", "indexSize", "nindexes",
+	} {
+		if val := docLookup(doc, k); val != nil {
+			v[k] = val
+		}
+	}
+	return v
+}
+
+func newStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show a serverStatus summary (--json for the full document)",
+		Args:  cobra.NoArgs,
+		Example: `  muxcat mongodb status
+  muxcat mongodb status --json`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			start := time.Now()
+			cfg, name, conn, err := resolveTarget(cmd)
+			if err != nil {
+				return err
+			}
+			timeout, err := queryTimeout(conn, cli.FlagTimeout(cmd))
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+			defer cancel()
+			client, err := connect(ctx, cfg, conn)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = client.Disconnect(context.Background()) }()
+
+			var res bson.D
+			if err := client.Database("admin").RunCommand(ctx,
+				bson.D{{Key: "serverStatus", Value: 1}}).Decode(&res); err != nil {
+				return classifyErr(err, "server status failed")
+			}
+			jsonData, err := relaxedJSON(res)
+			if err != nil {
+				return output.NewError(output.CodeGeneral, "failed to encode the server status: "+err.Error(), "")
+			}
+			value := statusValue(res)
+			return cli.RenderResult(cmd, &output.Result{
+				Value:    value,
+				JSONData: jsonData,
+			}, meta(name, start, false))
+		},
+	}
+}
+
+// statusValue picks the summary fields of a serverStatus response as flat
+// dotted keys; missing sections (e.g. no wiredTiger on in-memory engines)
+// are skipped. serverStatus mem figures are already in MB.
+func statusValue(doc bson.D) map[string]any {
+	v := map[string]any{}
+	for _, k := range []string{"host", "version", "process", "pid", "uptime"} {
+		if val := docLookup(doc, k); val != nil {
+			v[k] = val
+		}
+	}
+	if sub := subDoc(doc, "connections"); sub != nil {
+		for _, k := range []string{"current", "available", "active"} {
+			if val := docLookup(sub, k); val != nil {
+				v["connections."+k] = val
+			}
+		}
+	}
+	if sub := subDoc(doc, "mem"); sub != nil {
+		for _, k := range []string{"resident", "virtual"} {
+			if val := docLookup(sub, k); val != nil {
+				v["mem."+k] = val
+			}
+		}
+	}
+	if sub := subDoc(doc, "opcounters"); sub != nil {
+		for _, k := range []string{"insert", "query", "update", "delete", "getmore", "command"} {
+			if val := docLookup(sub, k); val != nil {
+				v["opcounters."+k] = val
+			}
+		}
+	}
+	if wt := subDoc(doc, "wiredTiger"); wt != nil {
+		if cache := subDoc(wt, "cache"); cache != nil {
+			// 8.0 renamed the field to "bytes currently in the cache".
+			cur := docLookup(cache, "bytes currently in the cache")
+			if cur == nil {
+				cur = docLookup(cache, "bytes currently in cache")
+			}
+			if cur != nil {
+				v["wiredTiger.cache.currentBytes"] = cur
+			}
+			if val := docLookup(cache, "maximum bytes configured"); val != nil {
+				v["wiredTiger.cache.maxBytes"] = val
+			}
+		}
+	}
+	return v
+}
+
+// subDoc returns a nested document, or nil when absent or not a document.
+func subDoc(d bson.D, key string) bson.D {
+	if sub, ok := docLookup(d, key).(bson.D); ok {
+		return sub
+	}
+	return nil
+}
