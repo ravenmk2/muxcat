@@ -376,6 +376,21 @@ func TestConnTestDegradedNoProductHeader(t *testing.T) {
 	}
 }
 
+// conn test must honor the -c/--conn flag when no positional name is given,
+// not silently fall back to the default connection.
+func TestConnTestHonorsConnFlag(t *testing.T) {
+	setupEnv(t)
+	s := newEsServer(t)
+	s.addConn(t, "first") // becomes the default
+	s.addConn(t, "second")
+
+	env := runJSON(t, "es", "-c", "second", "conn", "test")
+	meta := env["meta"].(map[string]any)
+	if meta["connection"] != "second" {
+		t.Fatalf("conn test ignored -c, tested %v", meta["connection"])
+	}
+}
+
 func TestRequestRawSemantics(t *testing.T) {
 	setupEnv(t)
 	s := newEsServer(t)

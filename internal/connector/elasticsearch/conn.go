@@ -413,6 +413,9 @@ func newConnTestCmd() *cobra.Command {
 			if len(args) > 0 {
 				sel = args[0]
 			}
+			if sel == "" {
+				sel = cli.FlagString(cmd, "conn")
+			}
 			name, conn, err := resolve(cfg, sel)
 			if err != nil {
 				return err
