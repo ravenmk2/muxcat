@@ -41,10 +41,10 @@ Quickstart:
   3. muxcat mongodb query users '{"age":{"$gte":18}}'
 
 A connection carries credentials (encrypted at rest, never echoed), an
-auth source, and an optional default database. Beyond connection
-management, read-only queries are available: query (find with
-filter/projection/sort), aggregate (pipelines; $out/$merge write stages
-are rejected), dbs and collections.`,
+auth source, and an optional default database. Read-only queries: query
+(find with filter/projection/sort), aggregate (pipelines; $out/$merge
+write stages are rejected), dbs and collections. Write commands
+(insert/update/delete/drop) refuse to run on readonly connections.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -55,6 +55,10 @@ are rejected), dbs and collections.`,
 		newAggregateCmd(),
 		newDbsCmd(),
 		newCollectionsCmd(),
+		newInsertCmd(),
+		newUpdateCmd(),
+		newDeleteCmd(),
+		newDropCmd(),
 	)
 	return c
 }

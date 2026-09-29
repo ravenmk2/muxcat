@@ -383,21 +383,8 @@ func newConnRmCmd() *cobra.Command {
 			if !ok {
 				return connNotFound(name)
 			}
-			if !cli.FlagBool(cmd, "yes") {
-				if !cli.RuntimeFrom(cmd.Context()).Interactive {
-					return output.NewError(output.CodeMissingArgument,
-						"removing a connection requires confirmation", "pass --yes in non-interactive environments")
-				}
-				confirm := false
-				form := huh.NewForm(huh.NewGroup(
-					huh.NewConfirm().Title("Remove connection " + name + "?").Value(&confirm),
-				))
-				if err := form.Run(); err != nil {
-					return err
-				}
-				if !confirm {
-					return output.NewError(output.CodeGeneral, "cancelled", "")
-				}
+			if err := confirmDestructive(cmd, "Remove connection "+name+"?"); err != nil {
+				return err
 			}
 
 			delete(cfg.Connections, name)
